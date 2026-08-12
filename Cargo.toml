@@ -56,6 +56,13 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 criterion = { version = "0.5", features = ["html_reports"] }
 
+# Decodes the two vendored track bitmaps for the `car_racing` demo. A
+# dev-dependency, not an optional dependency: cargo builds these only for
+# examples, tests and benches, so no consumer of the crate ever pulls it and the
+# published dependency graph is unchanged. That is also what lets the demos run
+# headless with no features enabled.
+png = "0.17"
+
 [[bench]]
 name = "sph_benchmarks"
 harness = false
@@ -97,6 +104,15 @@ name = "enc_vis"
 
 [[example]]
 name = "topo_test"
+
+[[example]]
+name = "pusher"
+
+[[example]]
+name = "cat_mouse"
+
+[[example]]
+name = "car_racing"
 
 [[example]]
 name = "cartpole_env_runner"

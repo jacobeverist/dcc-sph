@@ -1,0 +1,226 @@
+// Pusher — actor-critic control with a shaped reward.
+//
+// Port of `demos/Pusher.cpp` from jacobeverist/OgmaNeoDemos @ aogmaneo.
+// See `doc/Demos.md` for the deviations from upstream.
+//
+// The agent drives a disc around a square arena and has to shove a second disc onto
+// the origin. What makes it more than a homing task is that the pusher has to get
+// on the *far* side of the object first, which means moving away from the goal
+// before it can make progress.
+//
+// This is the crate's `Actor` on a multi-column action port: two columns of five
+// cells, one per axis, so the policy emits a 5x5 grid of moves rather than a
+// single choice.
+//
+// A random-action baseline runs first, so the learned numbers can be read against
+// something rather than in a vacuum.
+//
+//   cargo run --release --example pusher
+//   cargo run --release --example pusher -- --steps 500000
+
+use dcc_sph::helpers::Int3;
+use dcc_sph::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
+
+#[path = "support/mod.rs"]
+mod support;
+
+use support::args::Args;
+use support::encode::bin_unit;
+use support::env::pusher::{Outcome, PusherWorld};
+use support::report::Rolling;
+use support::rng::{seed_everything, Rng};
+
+const SENSOR_RES: i32 = 16;
+const ACTION_RES: i32 = 5;
+
+fn main() {
+    let args = Args::parse();
+
+    let steps: usize = args.get("steps", 300_000);
+    let baseline_steps: usize = args.get("baseline-steps", 50_000);
+    let seed: u64 = args.get("seed", 12345);
+    let every: usize = args.get("every", 50_000);
+    // Upstream has an exploration hook wired up but leaves it at 0, relying on the
+    // actor's own stochastic policy. Same default here.
+    // Upstream leaves its exploration hook at 0, relying on the actor's own
+    // stochastic policy. That is not enough here — see the timeout note below.
+    let exploration: f32 = args.get("exploration", 0.05);
+    // Steps before the object is respawned regardless. `--timeout 0` reproduces
+    // upstream, which has no episode limit; see `PusherWorld::timeout` for why the
+    // demo collapses without one.
+    let timeout: usize = args.get("timeout", 500);
+    let quiet = args.flag("quiet");
+
+    let mut rng = seed_everything(seed);
+
+    // --- Random baseline ---
+    //
+    // Goals reached per 100k steps means nothing on its own: the object respawns
+    // in [-0.6, 0.6]^2 and can drift onto the origin unaided. This measures how
+    // often that happens without a policy.
+
+    let baseline = run_random(baseline_steps, timeout, &mut rng);
+
+    // --- Hierarchy ---
+
+    let io_descs = vec![
+        IoDesc {
+            size: Int3::new(2, 2, SENSOR_RES),
+            io_type: IoType::Prediction,
+            num_dendrites_per_cell: 16,
+            up_radius: 2,
+            down_radius: 3,
+            ..Default::default()
+        },
+        IoDesc {
+            size: Int3::new(1, 2, ACTION_RES),
+            io_type: IoType::Action,
+            num_dendrites_per_cell: 16,
+            // Radius 0 — a 1x1 receptive field. The action port is two columns
+            // wide and there is nothing next to them worth seeing.
+            up_radius: 0,
+            down_radius: 3,
+            ..Default::default()
+        },
+    ];
+
+    let layer_descs = vec![LayerDesc {
+        hidden_size: Int3::new(7, 7, 32),
+        num_dendrites_per_cell: 4,
+        up_radius: 2,
+        recurrent_radius: 0,
+        down_radius: 2,
+        ticks_per_update: 1,
+    }];
+
+    let mut h = Hierarchy::new();
+    h.init_random(&io_descs, &layer_descs);
+    // Keep the action port out of the encoder's input entirely: the observation
+    // alone should determine the state, and echoing the action back into it only
+    // adds a shortcut.
+    h.params.ios[1].importance = 0.0;
+
+    let mut world = PusherWorld::new();
+    world.timeout = timeout;
+
+    println!("Pusher — {steps} steps, seed {seed}");
+    println!("  1 layer 7x7x32, IO0 (2,2,{SENSOR_RES}) Prediction, IO1 (1,2,{ACTION_RES}) Action (importance 0)");
+    println!(
+        "  random baseline over {baseline_steps} steps: {:.1} goals and {:.1} losses per 100k steps",
+        baseline.0, baseline.1
+    );
+    println!();
+
+    let mut reward_ema = Rolling::new(100_000, 0.0001);
+    let mut goals = 0u64;
+    let mut losses = 0u64;
+    let mut window_goals = 0u64;
+    let mut window_losses = 0u64;
+
+    let mut sensor_cis = vec![0i32; 4];
+    let mut action_cis = vec![0i32; 2];
+
+    for t in 0..steps {
+        // Read the policy's action, apply it, and feed that same action back in —
+        // upstream's ordering, and the one the Actor's history expects.
+        action_cis[0] = h.get_prediction_cis(1)[0];
+        action_cis[1] = h.get_prediction_cis(1)[1];
+
+        for a in action_cis.iter_mut() {
+            if exploration > 0.0 && rng.chance(exploration) {
+                *a = rng.below(ACTION_RES as usize) as i32;
+            }
+        }
+
+        let (reward, outcome) = world.step((action_cis[0], action_cis[1]), ACTION_RES, &mut rng);
+
+        match outcome {
+            Outcome::Goal => {
+                goals += 1;
+                window_goals += 1;
+            }
+            Outcome::OutOfBounds => {
+                losses += 1;
+                window_losses += 1;
+            }
+            Outcome::Ongoing | Outcome::Timeout => {}
+        }
+
+        let obs = world.observation();
+        for (i, &v) in obs.iter().enumerate() {
+            sensor_cis[i] = bin_unit(v, SENSOR_RES);
+        }
+
+        h.step(&[&sensor_cis, &action_cis], true, reward, 0.0);
+
+        reward_ema.push(reward);
+
+        if !quiet && every > 0 && (t + 1) % every == 0 {
+            let per100k = 100_000.0 / every as f64;
+            println!(
+                "  step {:>8} / {steps} | reward EMA {:>8.4} | per 100k: {:.1} goals, {:.1} lost",
+                t + 1,
+                reward_ema.ema(),
+                window_goals as f64 * per100k,
+                window_losses as f64 * per100k,
+            );
+            window_goals = 0;
+            window_losses = 0;
+        }
+    }
+
+    // --- Report ---
+
+    let scale = 100_000.0 / steps as f64;
+    let goals_per_100k = goals as f64 * scale;
+    let losses_per_100k = losses as f64 * scale;
+
+    println!();
+    println!("Over {steps} steps:");
+    println!("  goals reached   {goals} ({goals_per_100k:.1} per 100k steps)");
+    println!("  object lost     {losses} ({losses_per_100k:.1} per 100k steps)");
+    println!("  reward EMA      {:.4}", reward_ema.ema());
+    println!(
+        "  random baseline {:.1} goals, {:.1} lost per 100k steps",
+        baseline.0, baseline.1
+    );
+
+    if goals_per_100k > baseline.0 * 1.5 {
+        println!(
+            "\nLearned: reaching the goal far more often than random action does ({goals_per_100k:.1} vs {:.1} per 100k).",
+            baseline.0
+        );
+    } else {
+        println!(
+            "\nNot converged: no clear improvement on the random baseline — try more --steps."
+        );
+    }
+}
+
+/// Run the world under uniformly random actions and return goals and losses per
+/// 100k steps.
+fn run_random(steps: usize, timeout: usize, rng: &mut Rng) -> (f64, f64) {
+    if steps == 0 {
+        return (0.0, 0.0);
+    }
+
+    let mut world = PusherWorld::new();
+    world.timeout = timeout;
+    let mut goals = 0u64;
+    let mut losses = 0u64;
+
+    for _ in 0..steps {
+        let a = (
+            rng.below(ACTION_RES as usize) as i32,
+            rng.below(ACTION_RES as usize) as i32,
+        );
+        match world.step(a, ACTION_RES, rng).1 {
+            Outcome::Goal => goals += 1,
+            Outcome::OutOfBounds => losses += 1,
+            Outcome::Ongoing | Outcome::Timeout => {}
+        }
+    }
+
+    let scale = 100_000.0 / steps as f64;
+    (goals as f64 * scale, losses as f64 * scale)
+}

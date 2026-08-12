@@ -226,6 +226,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "macroquad",
+ "png",
  "pyo3",
  "rayon",
  "serde",

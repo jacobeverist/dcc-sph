@@ -5,5 +5,8 @@
 // headless and under the optional `macroquad-demos` feature.
 
 pub mod ball;
+pub mod catmouse;
 pub mod cluster;
+pub mod pusher;
+pub mod racing;
 pub mod wavy;
