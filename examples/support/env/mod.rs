@@ -10,4 +10,5 @@ pub mod cluster;
 pub mod pusher;
 pub mod racing;
 pub mod runner;
+pub mod video;
 pub mod wavy;

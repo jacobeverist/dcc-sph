@@ -89,6 +89,7 @@ Each demo is also split into `run(args, seed, rec) -> Summary` and a `main` that
 | `wavy_line` | `demos/Wavy_Line.cpp` | Sequence prediction; `write_state`/`read_state` round trip |
 | `wavy_classify` | `demos/Wavy_Classify.cpp` | Two Prediction ports, per-port `importance`, `ticks_per_update` |
 | `ball_physics` | `demos/Ball_Physics.cpp` | `ImageEncoder` + `reconstruct()`, closed-loop generation |
+| `video_prediction` | `demos/Video_Prediction.cpp` | RGB `ImageEncoder`, multi-pass training, generated video |
 | `pusher` | `demos/Pusher.cpp` | `Actor`, multi-column action port, shaped reward |
 | `cat_mouse` | `demos/Cat_Mouse.cpp`, `demos/catmouse/CatMouseEnv.cpp` | **Two hierarchies**, zero-sum reward, `IoType::None` observation |
 | `cat_mouse_pos` | `demos/Cat_Mouse_Pos.cpp` | A port's own prediction fed back as its next input |
@@ -160,6 +161,26 @@ The honest summary is that this is a hard, high-variance task where the model ei
 - **Position error is the headline metric, not frame MSE.** MSE prefers a *blank* frame to a slightly misplaced ball, because a misplaced ball is wrong twice over — once where it is drawn and once where it should have been. An undertrained model that collapsed to empty space scored 0.026 against 0.043 for a trained one that keeps a ball alive. The demo recovers the ball's position from each frame by subtracting the static background, and reports tracking error bucketed by how long the loop has run unaided.
 
 Typical result: the ball persists in 100% of generated frames at 3.4 m mean error against 5.3 m for a frozen frame, in a 15.6 m view. It learns the dynamics but decorrelates from the true trajectory, which the per-horizon breakdown shows directly.
+
+### `video_prediction`
+
+An `ImageEncoder` compresses each RGB frame to a CSDR, a hierarchy predicts the next one, and after several passes the loop closes: the hierarchy is fed its own predictions with learning off and generates the rest unaided.
+
+- **No video decoder, and no committed clip.** Upstream uses OpenCV but *only* for `cv::VideoCapture` frame reading — no `resize`, no `cvtColor`, and its rescale runs at scale 1.0, so it is a no-op. What the demo needs is a sequence of RGB frames, which is not a reason to take a video-decoding dependency. The default source is **procedural** (drifting shapes with parallax), so the demo runs out of the box and in CI. `--frames <dir>` points it at real extracted frames, decoded with the existing `png` dev-dependency:
+
+  ```bash
+  ffmpeg -i resources/Bullfinch192.mp4 -vf scale=64:64 frames/%04d.png
+  cargo run --release --example video_prediction -- --frames frames/
+  ```
+
+  That also sidesteps redistributing a derivative of Ogma's 2.7 MB clip.
+- Note the buffer layout for a 3-channel visible layer is `channel + 3 * (y + h * x)`, which differs from the single-channel `y + x * h` that `ball_physics` uses.
+
+**The verdict needs two checks, and neither alone would do.** Frame MSE can be beaten by *hedging* — emitting the blurry average of everywhere the scene might be — which scores well while having learned nothing about the motion. So the demo also reports **detail**: the standard deviation of pixel intensity in the generated frame against the real one. Hedging drives that toward zero. Retaining detail alone would not be enough either, since echoing the last frame verbatim retains all of it, which is exactly what the frozen baseline does.
+
+Typical result over 6 passes of a 90-frame procedural clip: generated MSE 0.021 against 0.041 for a frozen frame, retaining 79% of the real detail. Both conditions met, so it is generating rather than hedging.
+
+This is the same lesson `ball_physics` produced from the other direction — there, MSE preferred a blank frame to a slightly misplaced ball. Frame-space error is a poor judge of generative video in both directions, and each demo now carries a metric that is not fooled in its own way.
 
 ### `pusher`
 

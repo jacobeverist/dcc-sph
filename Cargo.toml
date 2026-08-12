@@ -107,6 +107,9 @@ name = "wavy_classify"
 name = "ball_physics"
 
 [[example]]
+name = "video_prediction"
+
+[[example]]
 name = "enc_vis"
 
 [[example]]
