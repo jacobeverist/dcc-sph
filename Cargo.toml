@@ -87,6 +87,18 @@ path = "examples/fidelity_dump.rs"
 name = "wavy_line"
 
 [[example]]
+name = "wavy_classify"
+
+[[example]]
+name = "ball_physics"
+
+[[example]]
+name = "enc_vis"
+
+[[example]]
+name = "topo_test"
+
+[[example]]
 name = "cartpole_env_runner"
 required-features = ["gymnasium-examples"]
 

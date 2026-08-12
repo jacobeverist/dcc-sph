@@ -172,6 +172,25 @@ pub fn ascii_image(pixels: &[u8], w: usize, h: usize, out_w: usize, out_h: usize
     out
 }
 
+/// Lay two multi-line blocks out side by side, for comparing a predicted frame
+/// against the real one.
+pub fn side_by_side(left: &str, right: &str, gap: usize) -> String {
+    let l: Vec<&str> = left.lines().collect();
+    let r: Vec<&str> = right.lines().collect();
+    let width = l.iter().map(|s| s.chars().count()).max().unwrap_or(0);
+
+    let mut out = String::new();
+    for i in 0..l.len().max(r.len()) {
+        let lhs = l.get(i).copied().unwrap_or("");
+        let pad = width.saturating_sub(lhs.chars().count());
+        out.push_str(lhs);
+        out.push_str(&" ".repeat(pad + gap));
+        out.push_str(r.get(i).copied().unwrap_or(""));
+        out.push('\n');
+    }
+    out
+}
+
 /// Axis-aligned bounds for [`ascii_scatter`].
 #[derive(Clone, Copy, Debug)]
 pub struct Bounds {

@@ -12,6 +12,7 @@
 
 pub mod args;
 pub mod encode;
+pub mod encoder_probe;
 pub mod env;
 pub mod report;
 pub mod rng;
