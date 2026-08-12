@@ -74,6 +74,7 @@ jobs:
           cargo run --release --example pusher        -- --steps 3000 --baseline-steps 1000 --quiet
           cargo run --release --example cat_mouse     -- --steps 2000 --baseline-steps 500 --quiet
           cargo run --release --example cat_mouse_pos -- --steps 2000 --baseline-steps 500 --quiet
+          cargo run --release --example explore       -- --steps 2000 --cells 4 --quiet
           cargo run --release --example car_racing    -- --steps 3000 --baseline-steps 1000 --quiet
           cargo run --release --example runner        -- --steps 1000 --baseline-steps 500 --quiet
 

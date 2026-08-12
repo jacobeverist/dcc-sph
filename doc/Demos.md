@@ -93,6 +93,7 @@ Each demo is also split into `run(args, seed, rec) -> Summary` and a `main` that
 | `pusher` | `demos/Pusher.cpp` | `Actor`, multi-column action port, shaped reward |
 | `cat_mouse` | `demos/Cat_Mouse.cpp`, `demos/catmouse/CatMouseEnv.cpp` | **Two hierarchies**, zero-sum reward, `IoType::None` observation |
 | `cat_mouse_pos` | `demos/Cat_Mouse_Pos.cpp` | A port's own prediction fed back as its next input |
+| `explore` | `demos/Explore.cpp` | Curiosity as the whole reward — prediction error |
 | `car_racing` | `demos/Car_Racing.cpp` | `Actor` steering, raycast sensors, a real track asset |
 | `runner` | `demos/Runner_Run.cpp`, `demos/runner/Runner.cpp` | 8-motor articulated body, 24-column observation port |
 | `vsa_char` | `demos/VSA_Char_Single.cpp` | Hypervector coding; a CSDR fed with no encoder |
@@ -215,6 +216,30 @@ Typical result over 150k decisions: capture rate 35.9% against 11.8% for random 
 The verdict is therefore decided on the chase, which depends on no such assumption. Whether the extra port *helps* is a third question again — run plain `cat_mouse` at the same seeds and compare `capture_rate`.
 
 The random-guess constant is derived rather than guessed: each wrapped axis difference is uniform on `[0, 0.5]`, so the expected distance is `0.5 · E[hypot(u, v)]` for `u, v ~ U(0, 1)`, which has the closed form `(√2 + ln(1 + √2)) / 3`, giving 0.3826. A 400k-sample simulation agrees to four places.
+
+### `explore`
+
+No goal and no external reward: the agent's reward **is** its own prediction error, the fraction of observation columns the hierarchy got wrong. Predicting your surroundings well earns nothing, so the only way to score is to go somewhere unmodelled.
+
+This works only because the observation port is `IoType::Prediction`. It is exactly the term that had to be dropped from `cat_mouse`, whose observation port is `IoType::None` and returns an empty slice from `get_prediction_cis` — the two demos are the same world with that one difference, which is why `explore` reuses `env/catmouse.rs` rather than porting a near-duplicate of upstream's `ExploreEnv`. Upstream's `map_test.png` is missing, so the maze is generated as elsewhere.
+
+**Measuring it took two corrections worth recording.** The first version compared 60k agent decisions against a 10k random walk and reported 100% coverage against 60% — but coverage is *monotonic*, so that gap was almost entirely the extra time. The baseline now runs for the same number of decisions by default.
+
+With that fixed the comparison collapsed to 92.1% against 89.5%, because on a small maze a random walk eventually reaches nearly everything: **final coverage saturates and cannot discriminate**. So the demo also reports time-to-coverage, which still can. Typical result over 60k decisions on a 13×13 maze:
+
+| | agent | random walk |
+|---|---|---|
+| final coverage | 92.1% | 89.5% |
+| steps to 50% | 7438 | 5149 |
+| steps to 90% | 10870 | never reached |
+
+The random walk is *faster* to 50% — curiosity takes time to bootstrap, since an untrained model is surprised by everything and the signal carries no direction. It is the tail that separates them.
+
+Note a milestone the baseline never reaches counts as a win rather than as missing data. Treating that `NaN` as a failure, which the first version did, reported the opposite of what happened.
+
+Curiosity is a *vanishing* signal — it pays only while the model is still wrong, so it fades exactly where the agent has already been. That is what makes it interesting and also what makes it slow; `--cells 10` and longer runs show it more clearly.
+
+The demo also accumulates upstream's hypervector "map": the observation bound to a positional vector and bundled into one `Bundle` standing for the whole space, which `support/vec.rs` makes nearly free.
 
 ### `car_racing`
 

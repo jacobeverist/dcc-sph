@@ -30,6 +30,7 @@ pub const OBS_SIZE: usize = SCAN_RAYS + 5;
 pub const ACTION_SIZE: usize = 3;
 
 /// A wall bitmap. `true` is solid, matching upstream's black pixels.
+#[derive(Clone)]
 pub struct Map {
     pub w: usize,
     pub h: usize,
@@ -417,6 +418,119 @@ impl PositionalMemory {
         let dx = wrapped(self.memory[0], true_x);
         let dy = wrapped(self.memory[1], true_y);
         (dx * dx + dy * dy).sqrt()
+    }
+}
+
+/// The hierarchy `explore` uses.
+///
+/// The observation port is `IoType::Prediction`, **not** `None` as in `cat_mouse`,
+/// and that single difference is what makes the demo possible: the curiosity reward
+/// is the hierarchy's own prediction error on that port, and a `None` port returns
+/// an empty slice from `get_prediction_cis`. It is the exact term that had to be
+/// dropped from `cat_mouse`.
+pub fn build_explore_hierarchy() -> Hierarchy {
+    let io_descs = vec![
+        IoDesc {
+            size: Int3::new(7, 5, OBS_RES),
+            io_type: IoType::Prediction,
+            num_dendrites_per_cell: 8,
+            up_radius: 2,
+            down_radius: 2,
+            ..Default::default()
+        },
+        IoDesc {
+            size: Int3::new(1, ACTION_SIZE as i32, ACTION_RES),
+            io_type: IoType::Action,
+            num_dendrites_per_cell: 8,
+            up_radius: 1,
+            down_radius: 2,
+            ..Default::default()
+        },
+    ];
+
+    let layer_descs = vec![LayerDesc {
+        hidden_size: Int3::new(5, 5, 32),
+        num_dendrites_per_cell: 4,
+        up_radius: 2,
+        recurrent_radius: 0,
+        down_radius: 2,
+        ticks_per_update: 1,
+    }];
+
+    let mut h = Hierarchy::new();
+    h.init_random(&io_descs, &layer_descs);
+    h.params.ios[1].importance = 0.1;
+    h
+}
+
+/// Tracks which map cells an agent has visited, and how quickly.
+///
+/// Both figures matter. On a small maze a random walk eventually reaches almost
+/// every cell, so *final* coverage saturates and cannot tell a good explorer from a
+/// lucky one. How many steps it took to get there still can.
+pub struct Coverage {
+    visited: Vec<bool>,
+    open_cells: usize,
+    count: usize,
+    steps: u64,
+    /// Step at which each decile of coverage was first reached.
+    milestones: Vec<Option<u64>>,
+}
+
+impl Coverage {
+    pub fn new(map: &Map) -> Self {
+        Coverage {
+            visited: vec![false; map.w * map.h],
+            open_cells: map.open_cells().len(),
+            count: 0,
+            steps: 0,
+            milestones: vec![None; 11],
+        }
+    }
+
+    pub fn visit(&mut self, map: &Map, pos: (f32, f32)) {
+        self.steps += 1;
+
+        let (x, y) = (pos.0.floor() as i32, pos.1.floor() as i32);
+        if !map.is_solid(x, y) {
+            let i = y as usize * map.w + x as usize;
+            if i < self.visited.len() && !self.visited[i] {
+                self.visited[i] = true;
+                self.count += 1;
+            }
+        }
+
+        // Record the first step at which each decile was reached.
+        let decile = (self.fraction() * 10.0).floor() as usize;
+        for d in 0..=decile.min(10) {
+            if self.milestones[d].is_none() {
+                self.milestones[d] = Some(self.steps);
+            }
+        }
+    }
+
+    /// Steps taken to first reach the given fraction of the map, if it was reached.
+    pub fn steps_to(&self, fraction: f32) -> Option<u64> {
+        let d = (fraction * 10.0).round() as usize;
+        self.milestones.get(d.min(10)).copied().flatten()
+    }
+
+    pub fn visited(&self) -> usize {
+        self.count
+    }
+
+    /// Fraction of reachable cells seen so far.
+    pub fn fraction(&self) -> f32 {
+        if self.open_cells == 0 {
+            0.0
+        } else {
+            self.count as f32 / self.open_cells as f32
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.visited.iter_mut().for_each(|v| *v = false);
+        self.count = 0;
     }
 }
 

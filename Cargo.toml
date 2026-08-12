@@ -128,6 +128,9 @@ name = "cat_mouse"
 name = "cat_mouse_pos"
 
 [[example]]
+name = "explore"
+
+[[example]]
 name = "car_racing"
 
 [[example]]
