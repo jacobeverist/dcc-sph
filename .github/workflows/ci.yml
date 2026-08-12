@@ -68,6 +68,7 @@ jobs:
           cargo run --release --example wavy_classify -- --train-steps 3000 --test-steps 1000 --hold 500 --quiet
           cargo run --release --example ball_physics  -- --train-episodes 5 --gen-episodes 1 --quiet
           cargo run --release --example video_prediction -- --passes 2 --frame-size 32 --frame-count 30 --gen-frames 20 --quiet
+          cargo run --release --example vsa_char      -- --train-steps 3000 --test-steps 500 --quiet
           cargo run --release --example enc_vis       -- --steps 3000 --quiet
           cargo run --release --example topo_test     -- --steps 3000 --quiet
           cargo run --release --example pusher        -- --steps 3000 --baseline-steps 1000 --quiet

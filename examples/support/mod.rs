@@ -19,6 +19,7 @@ pub mod metrics;
 pub mod report;
 pub mod rng;
 pub mod sweep;
+pub mod vec;
 
 #[cfg(feature = "macroquad-demos")]
 pub mod viz;

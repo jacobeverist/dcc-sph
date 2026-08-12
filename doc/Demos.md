@@ -95,6 +95,7 @@ Each demo is also split into `run(args, seed, rec) -> Summary` and a `main` that
 | `cat_mouse_pos` | `demos/Cat_Mouse_Pos.cpp` | A port's own prediction fed back as its next input |
 | `car_racing` | `demos/Car_Racing.cpp` | `Actor` steering, raycast sensors, a real track asset |
 | `runner` | `demos/Runner_Run.cpp`, `demos/runner/Runner.cpp` | 8-motor articulated body, 24-column observation port |
+| `vsa_char` | `demos/VSA_Char_Single.cpp` | Hypervector coding; a CSDR fed with no encoder |
 | `enc_vis` | `demos/EncVis.cpp` | Bare `Encoder`, receptive-field readout |
 | `topo_test` | `demos/Topo_Test_AON.cpp` | `Encoder` topology preservation |
 
@@ -234,6 +235,25 @@ Typical result over 100k frames: 13 laps, crashes down from 28 to 1.7 per 1000 f
 This is by far the hardest problem in the suite: a gait has to be discovered from a sparse velocity signal across eight coupled motors. Expect it to need far more steps than the other demos — and it is the slowest to run, being the only one simulating rigid bodies.
 
 Typical result over 200k control steps, with the furthest point reached in each window: 3.8 m → 6.3 m → 14.8 m → 20.2 m, mean velocity −0.11 → +0.70 m/s, resets falling from 6.1 to 1.7 per 1000 steps. Against a random baseline of 0.99 m. Almost all resets are hurdle collisions rather than stalls, which is the signature of a body that is actually travelling.
+
+### `vsa_char`
+
+Each character is bound to a positional vector and the results bundled, so a whole word collapses into a single `SegVec<256, 8>`. Written out one-hot that vector **is** a CSDR — 256 columns of 8 cells — so it feeds a `Hierarchy` directly with no encoding step at all. The hierarchy learns to predict the next word's vector, and reading the answer means unbinding each position and cleaning up against the alphabet: the *decoding* is algebra, not a learned decoder.
+
+`examples/support/vec.rs` ports `demos/vec.h` — segmented hypervectors with bind (`(a+b) mod L`), unbind, bundle, permute and `thin()`. It is renamed from upstream's `Vec` because shadowing `std::vec::Vec` in Rust would be a permanent nuisance, but the `*` and `/` operators are provided too so ported code reads the same. `thin()`'s context-dependent tie-breaking is preserved and is not decoration: an *empty* bundle has every value tied at zero, and without it every segment would collapse to 0.
+
+Upstream's `resources/ts_snippet.txt` is missing, so the corpus is generated — a small vocabulary walked by a sparse Markov chain — and `--text <path>` reads any ASCII file. Generating it also makes the difficulty a dial: `--successors 1` gives a deterministic chain, higher values a correspondingly harder one.
+
+**The demo judges itself against the sequence's own predictability ceiling, not against chance.** That distinction is the whole result:
+
+| | next-word accuracy | chance | ceiling | of ceiling |
+|---|---|---|---|---|
+| `--successors 2` (default) | 50.2% | 8.3% | 52.5% | **95.7%** |
+| `--successors 1` | 100.0% | 8.3% | 100.0% | **100%** |
+
+Judged against chance alone, the first row reads as a mediocre 50%. Judged against what the sequence actually permits — two roughly equally likely continuations — it is essentially optimal. The ceiling is measured from the corpus (for each word, how often its most common successor actually follows), not assumed.
+
+The demo also reports **encoding fidelity** before training: how much of a word survives the encode/decode round trip with no learning involved. Bundling `k` pairs into one vector is lossy, so this is the ceiling on character accuracy, and it separates "the hierarchy did not learn" from "the representation could not hold the word in the first place". At 4-character words it is 100%.
 
 ### `enc_vis` and `topo_test`
 

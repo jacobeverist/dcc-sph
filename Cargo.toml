@@ -110,6 +110,9 @@ name = "ball_physics"
 name = "video_prediction"
 
 [[example]]
+name = "vsa_char"
+
+[[example]]
 name = "enc_vis"
 
 [[example]]
