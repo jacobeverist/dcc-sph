@@ -59,10 +59,21 @@ jobs:
 
       # The demos are headless and text-only by default, so CI can actually run
       # them. Building them is not enough: a demo that panics on step one still
-      # compiles. These are deliberately tiny — enough to exercise the setup,
-      # encoding, step loop and reporting of each without turning CI into a
-      # training run. `runner` is the slow one (rigid-body simulation), so it gets
-      # the smallest budget.
+      # compiles.
+      #
+      # This gate is EXIT CODE ONLY, deliberately. It asks whether each demo sets
+      # up, encodes, steps, reports and exits — not whether it learned anything.
+      # Whether a configuration learns is an experiment, and experiments are what
+      # this repository is for; they belong in an offline run with `--repeat` and
+      # `--sweep`, at step counts a CI runner has no business spending, and with a
+      # human reading the spread. A CI job that failed on a learning threshold
+      # would make every experiment a build break.
+      #
+      # So the step counts here are deliberately far too small to learn at, and
+      # that is the point rather than a compromise: `stacking_prog` reports a
+      # NEGATIVE verdict at these budgets and still exits 0, as it should.
+      # `runner` is the slow one (rigid-body simulation), so it gets the smallest
+      # budget.
       - name: Smoke-run the demos
         env:
           RAYON_NUM_THREADS: 1
@@ -88,10 +99,13 @@ jobs:
           cargo run --release --example stacking_prog -- --steps 3000 --trials 10 --quiet
           cargo run --release --example stacking_prog -- --steps 3000 --trials 10 --train-policy scripted --quiet
 
-      # Metrics are what makes the step above worth more than an exit-code check:
-      # a demo that trains to noise still exits 0, but its summary numbers do not
-      # lie. This validates the schema holds and that the same seed reproduces a
-      # run byte for byte — the property `--repeat` and `--sweep` rest on.
+      # Checks the metrics FORMAT, not the metrics. Two properties everything else
+      # rests on: the records parse and carry their identifying keys, and the same
+      # seed reproduces a run byte for byte — without that second one `--repeat`
+      # and `--sweep` compare nothing.
+      #
+      # No metric VALUE is asserted anywhere here, on purpose. Judging a run by its
+      # numbers is the offline experiment's job; see the note on the step above.
       - name: Metrics schema and determinism
         env:
           RAYON_NUM_THREADS: 1

@@ -389,3 +389,11 @@ CI builds the crate in its own job and no further: opening a window is not CI's 
 ## What CI does
 
 `cargo build --all-targets`, `cargo test --all-targets`, `cargo clippy --all-targets -- -D warnings`, and then **runs every demo** at small step counts. Building is not enough — a demo that panics on step one still compiles. `stacking_rl` and `stacking_prog` are each run twice, once per mode: `--goal-mode top` and `--train-policy scripted` are the only demo paths through `step_with_goal`, and a build that broke the goal path would otherwise still pass.
+
+**CI checks that a demo runs, never that it learns.** The gate is the exit code and nothing else: set up, encode, step, report, exit. No metric value is asserted anywhere, and the metrics job checks the record *format* and same-seed determinism rather than the numbers in it.
+
+That line is deliberate, not an omission. Whether a configuration learns is an experiment, and experiments are what this repository is for — they belong in an offline run with `--repeat` and `--sweep`, at step counts a CI runner has no business spending, with someone reading the spread. A job that failed on a learning threshold would turn every experiment into a build break, and would put pressure on the demos to report flattering numbers, which is the exact failure this suite's baselines exist to prevent.
+
+So the CI step counts are far too small to learn at, and that is the point rather than a compromise. `stacking_prog` reports a **negative** verdict at CI budgets and exits 0, as it should.
+
+The one place a learning outcome *is* asserted is `tests/goal_conditioned.rs`, and it is a different claim: that the goal is wired to the decoder at all. Without it the whole goal path could be a no-op and every other test in that file would still pass. It is deterministic at a fixed seed, it takes 4000 steps of a two-state toy problem, and it is a correctness test rather than a quality bar. `tests/smoke_test.rs::test_prediction_improves_on_repeating_sequence` is the same kind of thing and predates the demos.
