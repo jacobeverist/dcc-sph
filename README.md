@@ -105,12 +105,12 @@ Runnable examples in [`examples/`](examples/):
 | --- | --- | --- |
 | **Wave prediction** | `cargo run --release --example wave_prediction` | Wavy-line sequence prediction with ASCII recall output. The "hello world". |
 | **CartPole** | `cargo run --release --example cartpole` | Balancing via the built-in actor-critic, with built-in physics — no Python. |
-| **CartPole (Gymnasium)** | `cargo run --release --example cartpole_env_runner --features gymnasium-examples` | The same task driven through a real Gymnasium environment. Needs Python — see below. |
-| **LunarLander** | `cargo run --release --example lunarlander --features gymnasium-examples` | A harder continuous-control task. Needs Python — see below. |
+| **CartPole (Gymnasium)** | `cargo run --release -p dcc_sph_gym_examples --example cartpole_env_runner` | The same task driven through a real Gymnasium environment. Needs Python — see below. |
+| **LunarLander** | `cargo run --release -p dcc_sph_gym_examples --example lunarlander` | A harder continuous-control task. Needs Python — see below. |
 
 ### Running the Gymnasium demos
 
-These drive [Gymnasium](https://gymnasium.farama.org/) environments via PyO3, so they need a Python environment as well as the crate feature. On Apple Silicon, use the Homebrew Python explicitly so the interpreter architecture matches the Rust binary:
+These live in the separate [`examples-gym/`](examples-gym/) crate and drive [Gymnasium](https://gymnasium.farama.org/) environments via PyO3, so they need a Python environment. On Apple Silicon, use the Homebrew Python explicitly so the interpreter architecture matches the Rust binary:
 
 ```bash
 /opt/homebrew/bin/python3 -m venv .venv
@@ -118,7 +118,7 @@ source .venv/bin/activate
 pip install maturin 'gymnasium[box2d]'
 deactivate
 
-PYO3_PYTHON=`pwd`/.venv/bin/python3 cargo build --release --features gymnasium-examples
+PYO3_PYTHON=`pwd`/.venv/bin/python3 cargo build --release -p dcc_sph_gym_examples
 ```
 
 The runners detect the `.venv` directory themselves, so no activation is needed to run them.
@@ -190,7 +190,11 @@ CI pins `RAYON_NUM_THREADS=1`. That is not tidiness: the parallel paths use dete
 
 ## Optional features
 
-- `gymnasium-examples` — builds the two PyO3-backed example runners. Off by default, and deliberately not part of `--all-features` in CI, because it pulls `pyo3` with `auto-initialize` and needs Python development headers. With it off, no consumer of this crate pulls any Python.
+**None.** The library has no optional features and, deliberately, no `pyo3`.
+
+There was a `gymnasium-examples` feature until 2026-08-12, gating an optional `pyo3` for the two Gymnasium runners. `pyo3-ffi` sets `links = "python"` and cargo permits exactly one such package per dependency graph, so an optional dependency was not enough: the constraint binds the moment any consumer enables the feature, and dcc-core's Python binding builds with every port on.
+
+The runners now live in [`examples-gym/`](examples-gym/), a workspace member that nothing depends on, so `pyo3` never enters a consumer's graph at all. See [`doc/Conformance.md`](doc/Conformance.md) (R11, R16).
 
 ---
 

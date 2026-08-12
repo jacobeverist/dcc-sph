@@ -22,14 +22,18 @@ license = "CC-BY-NC-SA-4.0"
 
 [dependencies]
 rayon = "1"
-# Optional, and only for the two Gymnasium example runners. It stays optional so a
-# normal build (and every consumer of this crate) pulls no Python at all.
+
+# NOTE: there is deliberately no `pyo3` here, and there must not be one.
 #
-# This used to carry a note about staying in lockstep with dcc-core's Python
-# binding, because pyo3 sets `links = "python"` and a cargo workspace may contain
-# exactly one pyo3. Extraction dissolved that constraint: this crate is no longer
-# in that workspace, and with the feature off pyo3 never enters a consumer's graph.
-pyo3 = { version = "0.29", optional = true, features = ["auto-initialize"] }
+# It sat here as an optional dependency for the two Gymnasium example runners until
+# 2026-08-12. `pyo3-ffi` sets `links = "python"`, and cargo permits at most one package
+# with a given `links` value in an ENTIRE dependency graph — so two pyo3 majors are
+# unresolvable, not merely duplicated. dcc-core's Python binding links the whole engine
+# graph including this crate, which meant the two repositories had to keep pyo3 majors
+# in lockstep. That worked only because they happened to match.
+#
+# The runners now live in `examples-gym/`, a workspace member that nothing depends on,
+# so pyo3 never enters a consumer's graph at all. See doc/Conformance.md (R11, R16).
 
 # Lint policy, in the manifest rather than in lib.rs so it reaches examples, tests
 # and benches too — the lints below fire mostly in exactly those targets.
@@ -53,27 +57,20 @@ criterion = { version = "0.5", features = ["html_reports"] }
 name = "sph_benchmarks"
 harness = false
 
-[features]
-# Needs a Python environment with `gymnasium[box2d]` as well as the crate feature,
-# so it is not part of `--all-features` in CI.
-gymnasium-examples = ["dep:pyo3"]
-
 [[example]]
 name = "fidelity_dump"
 path = "examples/fidelity_dump.rs"
 
-[[example]]
-name = "cartpole_env_runner"
-required-features = ["gymnasium-examples"]
-
-[[example]]
-name = "lunarlander"
-required-features = ["gymnasium-examples"]
-
 # Standalone workspace root — this crate is no longer a member of the dcc-core
-# workspace. An empty [workspace] tells cargo to treat this manifest as its own
-# root rather than searching upwards.
+# workspace. The [workspace] table tells cargo to treat this manifest as its own root
+# rather than searching upwards, which is what stops a checkout placed inside another
+# workspace from being absorbed into it.
+#
+# `examples-gym` is a member, NOT a dependency. dcc-core depends on the `dcc_sph`
+# package by name, so a sibling member never enters its graph — which is the whole
+# point: it is where `pyo3` can live without the library carrying it.
 [workspace]
+members = ["examples-gym"]
 
 [profile.release]
 opt-level = 3

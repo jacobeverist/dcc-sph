@@ -34,9 +34,9 @@ cargo run --release --example cartpole
 cargo run --release --example wave_prediction
 
 # Gymnasium examples — requires Python venv (see below)
-PYO3_PYTHON=`pwd`/.venv/bin/python3 cargo build --release --features gymnasium-examples
-cargo run --release --example cartpole_env_runner --features gymnasium-examples
-cargo run --release --example lunarlander --features gymnasium-examples
+PYO3_PYTHON=`pwd`/.venv/bin/python3 cargo build --release -p dcc_sph_gym_examples
+cargo run --release -p dcc_sph_gym_examples --example cartpole_env_runner
+cargo run --release -p dcc_sph_gym_examples --example lunarlander
 ```
 
 **Python venv setup (Apple Silicon — one-time):**
@@ -66,8 +66,10 @@ tests/
 examples/
   cartpole.rs             — CartPole RL (pure Rust physics)
   wave_prediction.rs      — wavy-line sequence prediction (pure Rust)
-  cartpole_env_runner.rs  — CartPole-v1 via gymnasium (--features gymnasium-examples)
-  lunarlander.rs          — LunarLander-v3 via gymnasium (--features gymnasium-examples)
+examples-gym/            — SEPARATE CRATE; pyo3 lives here, not in the library
+  examples/
+    cartpole_env_runner.rs — CartPole-v1 via gymnasium
+    lunarlander.rs         — LunarLander-v3 via gymnasium
 ```
 
 ### Architecture

@@ -7,7 +7,7 @@
 // Note: LunarLander also needs Box2D: `pip install gymnasium[box2d]`
 //
 // Run with:
-//   cargo run --release --example lunarlander --features gymnasium-examples
+//   cargo run --release -p dcc_sph_gym_examples --example lunarlander
 
 use dcc_sph::helpers::Int3;
 use dcc_sph::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
