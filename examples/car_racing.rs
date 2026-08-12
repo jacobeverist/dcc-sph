@@ -20,9 +20,11 @@ use std::path::PathBuf;
 mod support;
 
 use support::args::Args;
+use support::checkpoint;
 use support::env::racing::{
     build_hierarchy, random_steer, Racing, Track, NUM_SENSORS, SENSOR_GRID, SENSOR_RES, STEER_RES,
 };
+use support::probe;
 use support::report::Rolling;
 use support::metrics::{Recorder, Summary};
 use support::sweep;
@@ -107,6 +109,8 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     // same configuration.
 
     let mut h = build_hierarchy();
+    // Resume from a checkpoint if one was given, before any training.
+    checkpoint::maybe_load(&mut h, args);
 
     let mut env = Racing::new(track);
 
@@ -172,10 +176,20 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
         if every > 0 && (t + 1) % every == 0 {
             let per1000 = 1000.0 / every as f64;
+            // The actor's own view of the run: the critic's value estimate, and how
+            // full the credit-assignment history is. Learning only begins once that
+            // history passes `actor::Params::min_steps`, so a run that looks dead
+            // early is often just waiting for it to fill.
+            let actor = probe::actor_stats(&h, 1);
+            let critic = actor.map(|a| a.mean_value as f64).unwrap_or(f64::NAN);
+            let fill = actor.map(|a| a.history_fill() as f64).unwrap_or(f64::NAN);
+
             rec.sample(
                 t as u64 + 1,
                 &[
                     ("reward_ema", reward_ema.ema() as f64),
+                    ("critic_value", critic),
+                    ("history_fill", fill),
                     ("crashes_per_1000", window_crashes as f64 * per1000),
                     ("distance_per_1000", window_distance * per1000),
                     ("laps", laps as f64),
@@ -236,6 +250,8 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
         say!("\nNot converged: no clear gain on the random baseline — try more --steps.");
         summary.verdict(false, "no clear gain on the random baseline");
     }
+
+    checkpoint::maybe_save(&h, args);
 
     rec.finish_summary(&summary);
     summary

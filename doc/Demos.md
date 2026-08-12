@@ -56,6 +56,28 @@ In matrix mode each individual run is silenced (`--silent`, which suppresses the
 
 A difference smaller than the spread is not a difference. The table prints that reminder under itself for a reason.
 
+## Saving and resuming
+
+```bash
+cargo run --release --example runner -- --steps 300000 --save runner.ohr
+cargo run --release --example runner -- --steps 300000 --load runner.ohr   # carry on
+```
+
+`--save` / `--load` persist the whole model; `--save-weights` / `--load-weights` persist weights without the running state, which is smaller and portable across runs that differ in where they happened to be in a sequence. `cat_mouse` has two agents, so it writes the mouse to `<path>.mouse` alongside the cat.
+
+A missing or unreadable checkpoint is fatal rather than a warning. A run that silently trained from scratch when it was told to resume would waste exactly the time it was meant to save.
+
+This is upstream's `S`-to-save key, and it covers `Hierarchy::write`/`read` and `write_weights`/`read_weights` — the latter pair having previously been called from nowhere in the repository at all.
+
+## What the actor is thinking
+
+The RL demos record two numbers that explain *why* a run is or is not learning, and that nothing in this repository could previously observe — `Hierarchy::get_actor` was never called, so the critic and the replay buffer were unreachable:
+
+- **`critic_value`** — the actor's mean value estimate. It should move as the policy finds reward.
+- **`history_fill`** — how full the credit-assignment history is, as a fraction. **Learning does not begin until this passes `actor::Params::min_steps`**, so an early run that looks dead is often just waiting for it. In `pusher` it reaches 1.0 by about step 1000.
+
+`examples/support/probe.rs` also offers `prediction_confidence` (mean peak softmax over a port — it rises before any accuracy metric moves), `action_values`, and `layer_updates`. Each is guarded: `get_actor` and `get_prediction_values` index through `d_indices`, which holds a *decoder* index for a Prediction port and `-1` for a `None` port, so calling them unguarded reads the wrong actor or panics.
+
 ## Driving a demo programmatically
 
 Each demo's hierarchy lives in its environment module — `env::pusher::build_hierarchy()`, `env::ball::build()`, `env::wavy::build_line_hierarchy()`, and so on — rather than inline in `main`. The windowed viewer and the headless demo therefore cannot drift apart, and a caller can construct exactly the configuration a demo uses.

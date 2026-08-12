@@ -22,6 +22,7 @@ use dcc_sph::helpers::{SliceReader, StreamReader, StreamWriter, VecWriter};
 mod support;
 
 use support::args::Args;
+use support::checkpoint;
 use support::encode::{bin_range, unbin_range};
 use support::env::wavy::{
     build_line_hierarchy, WavyLine, LINE_COLUMN_SIZE as COLUMN_SIZE, LINE_MAX, LINE_MIN,
@@ -80,6 +81,8 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     // The hierarchy lives in `support/env/wavy.rs` so a sweep or the viewer drives
     // exactly this configuration.
     let mut h = build_line_hierarchy(num_inputs);
+    // Resume from a checkpoint if one was given, before any training.
+    checkpoint::maybe_load(&mut h, args);
 
     let mut env = WavyLine::new(num_inputs);
     env.noise = noise;
@@ -301,6 +304,8 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
         say!("\nNot converged: try more --steps, or --ahead > 1 for a less trivial baseline.");
         summary.verdict(false, "try more --steps, or --ahead > 1");
     }
+
+    checkpoint::maybe_save(&h, args);
 
     rec.finish_summary(&summary);
     summary

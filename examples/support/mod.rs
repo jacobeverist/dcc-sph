@@ -11,8 +11,9 @@
 #![allow(dead_code)]
 
 pub mod args;
+pub mod checkpoint;
 pub mod encode;
-pub mod encoder_probe;
+pub mod probe;
 pub mod env;
 pub mod metrics;
 pub mod report;

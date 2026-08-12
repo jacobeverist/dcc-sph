@@ -27,9 +27,11 @@ use support::env::catmouse::{
     build_hierarchy, CatMouseEnv, Map, ACTION_RES, ACTION_SIZE, OBS_RES, OBS_SIZE,
 };
 use support::report::{sparkline, Rolling};
+use support::checkpoint;
 use support::metrics::{Recorder, Summary};
-use support::sweep;
+use support::probe;
 use support::rng::{seed_everything, Rng};
+use support::sweep;
 
 /// Physics runs at 120 Hz, control and learning at 30 Hz — four physics substeps
 /// per decision, with the action held across them. Upstream's `dt` and `aiDT`.
@@ -107,6 +109,17 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     let mut cat_h = build_hierarchy();
     let mut mouse_h = build_hierarchy();
+
+    // Two hierarchies means two checkpoints. `--load` names the cat's; the mouse's
+    // gets a `.mouse` suffix, so a matched pair travels together.
+    if let Some(path) = args.str("load") {
+        checkpoint::load_hierarchy(&mut cat_h, std::path::Path::new(path))
+            .unwrap_or_else(|e| panic!("--load {path}: {e}"));
+        let mouse_path = format!("{path}.mouse");
+        checkpoint::load_hierarchy(&mut mouse_h, std::path::Path::new(&mouse_path))
+            .unwrap_or_else(|e| panic!("--load {mouse_path}: {e}"));
+        say!("Loaded both agents from {path} and {mouse_path}");
+    }
 
     say!("Cat and Mouse — {steps} decisions at 30 Hz, seed {seed}");
     say!("  maze {map_w}x{map_h} (generated; upstream's map0.png is missing from the repo)");
@@ -189,10 +202,20 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
         if every > 0 && (t + 1) % every == 0 {
             trend.push(time_to_capture.mean());
+            // The actor's own view of the run: the critic's value estimate, and how
+            // full the credit-assignment history is. Learning only begins once that
+            // history passes `actor::Params::min_steps`, so a run that looks dead
+            // early is often just waiting for it to fill.
+            let actor = probe::actor_stats(&cat_h, 1);
+            let critic = actor.map(|a| a.mean_value as f64).unwrap_or(f64::NAN);
+            let fill = actor.map(|a| a.history_fill() as f64).unwrap_or(f64::NAN);
+
             rec.sample(
                 t as u64 + 1,
                 &[
                     ("capture_rate", capture_rate.mean() as f64),
+                    ("critic_value", critic),
+                    ("history_fill", fill),
                     ("steps_to_capture", time_to_capture.mean() as f64),
                     ("mean_separation", separation.mean() as f64),
                     ("captures", captures as f64),
@@ -256,6 +279,15 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     } else {
         say!("\nEvenly matched so far, or neither has learned much — try more --steps.");
         summary.verdict(false, "evenly matched, or neither has learned much");
+    }
+
+    if let Some(path) = args.str("save") {
+        checkpoint::save_hierarchy(&cat_h, std::path::Path::new(path))
+            .unwrap_or_else(|e| panic!("--save {path}: {e}"));
+        let mouse_path = format!("{path}.mouse");
+        checkpoint::save_hierarchy(&mouse_h, std::path::Path::new(&mouse_path))
+            .unwrap_or_else(|e| panic!("--save {mouse_path}: {e}"));
+        say!("Saved both agents to {path} and {mouse_path}");
     }
 
     rec.finish_summary(&summary);

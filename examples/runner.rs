@@ -20,11 +20,13 @@
 mod support;
 
 use support::args::Args;
+use support::checkpoint;
 use support::encode::{bin_sigmoid, bin_unit};
 use support::env::runner::{
     build_hierarchy, ResetReason, RunnerWorld, ACTION_RES, NUM_SEGMENTS, SENSOR_COLUMNS,
     SENSOR_COUNT, SENSOR_RES, STATE_SIZE,
 };
+use support::probe;
 use support::report::Rolling;
 use support::metrics::{Recorder, Summary};
 use support::sweep;
@@ -77,6 +79,8 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     // Built in `support/env/runner.rs` so a sweep drives the same configuration.
     let mut h = build_hierarchy();
+    // Resume from a checkpoint if one was given, before any training.
+    checkpoint::maybe_load(&mut h, args);
 
     let mut world = RunnerWorld::new();
 
@@ -155,10 +159,20 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
         }
 
         if every > 0 && (t + 1) % every == 0 {
+            // The actor's own view of the run: the critic's value estimate, and how
+            // full the credit-assignment history is. Learning only begins once that
+            // history passes `actor::Params::min_steps`, so a run that looks dead
+            // early is often just waiting for it to fill.
+            let actor = probe::actor_stats(&h, 1);
+            let critic = actor.map(|a| a.mean_value as f64).unwrap_or(f64::NAN);
+            let fill = actor.map(|a| a.history_fill() as f64).unwrap_or(f64::NAN);
+
             rec.sample(
                 t as u64 + 1,
                 &[
                     ("mean_velocity", velocity.ema() as f64),
+                    ("critic_value", critic),
+                    ("history_fill", fill),
                     ("window_furthest", window_furthest as f64),
                     ("resets_per_1000", window_resets as f64 * 1000.0 / every as f64),
                 ],
@@ -237,6 +251,8 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
         );
         summary.verdict(false, "no further than random flailing");
     }
+
+    checkpoint::maybe_save(&h, args);
 
     rec.finish_summary(&summary);
     summary

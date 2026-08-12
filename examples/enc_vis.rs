@@ -13,7 +13,7 @@
 // (`resources/density_image5.png`) is missing from the repository, so the field is
 // generated procedurally. And it reads a stored `vl.means` scalar per cell, which
 // this crate's byte-weight ART encoder does not have — see
-// `examples/support/encoder_probe.rs` for how the position is recovered instead.
+// `examples/support/probe.rs` for how the position is recovered instead.
 //
 //   cargo run --release --example enc_vis
 //   cargo run --release --example enc_vis -- --steps 200000 --cells 64
@@ -25,7 +25,7 @@ mod support;
 
 use support::args::Args;
 use support::encode::bin_unit;
-use support::encoder_probe::{probe_receptive_fields, CellField};
+use support::probe::{probe_receptive_fields, CellField};
 use support::env::cluster::{build_enc_vis_encoder, DensityField};
 use support::report::{ascii_scatter, Bounds, Rolling};
 use support::metrics::{Recorder, Summary};
@@ -193,10 +193,10 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     let sample_cells: Vec<&CellField> = committed.iter().copied().take(12).collect();
     for f in &sample_cells {
-        let profiles = support::encoder_probe::weight_profiles(&e, 0, f.column, f.cell);
+        let profiles = support::probe::weight_profiles(&e, 0, f.column, f.cell);
         let rows: Vec<String> = profiles
             .iter()
-            .map(|p| support::encoder_probe::render_profile(p, 40))
+            .map(|p| support::probe::render_profile(p, 40))
             .collect();
         say!(
             "  c{}/{:<3} {} {}  compactness {:.2}",

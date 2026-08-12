@@ -24,6 +24,119 @@
 
 use dcc_sph::encoder::Encoder;
 use dcc_sph::helpers::{project, Float2, Int2};
+use dcc_sph::hierarchy::{Hierarchy, IoType};
+
+// --- Actor and decoder introspection ---
+//
+// Everything in this section reads library surface that nothing else in the
+// repository reaches. `Hierarchy::get_actor` was never called, so the critic's
+// value estimate and the replay buffer's fill level — the two numbers that explain
+// *why* an RL run is or is not learning — could not be observed at all. The RL
+// demos now report them.
+
+/// What the actor on an Action port currently believes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ActorStats {
+    /// Mean critic value across the port's columns. Rises as the policy finds
+    /// reward and flattens when it stops improving.
+    pub mean_value: f32,
+    pub max_value: f32,
+    pub min_value: f32,
+    /// How full the credit-assignment history is. Learning only begins once this
+    /// exceeds `actor::Params::min_steps`, so a run that looks dead early is often
+    /// just waiting for this to fill.
+    pub history_size: usize,
+    pub history_capacity: usize,
+}
+
+impl ActorStats {
+    /// Fraction of the replay buffer in use.
+    pub fn history_fill(&self) -> f32 {
+        if self.history_capacity == 0 {
+            0.0
+        } else {
+            self.history_size as f32 / self.history_capacity as f32
+        }
+    }
+}
+
+/// Read the actor behind IO port `io`, or `None` if that port has no actor.
+///
+/// The guard matters: `Hierarchy::get_actor` indexes through `d_indices`, which
+/// holds a *decoder* index for a Prediction port and `-1` for a `None` port. Called
+/// on either, it would silently read the wrong actor or panic.
+pub fn actor_stats(h: &Hierarchy, io: usize) -> Option<ActorStats> {
+    if h.get_io_type(io) != IoType::Action {
+        return None;
+    }
+
+    let actor = h.get_actor(io);
+    let values = actor.get_hidden_values();
+
+    if values.is_empty() {
+        return None;
+    }
+
+    let sum: f32 = values.iter().sum();
+
+    Some(ActorStats {
+        mean_value: sum / values.len() as f32,
+        max_value: values.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+        min_value: values.iter().copied().fold(f32::INFINITY, f32::min),
+        history_size: actor.get_history_size(),
+        history_capacity: actor.get_history_capacity(),
+    })
+}
+
+/// Mean peak softmax probability over a port's columns: how *confident* the
+/// prediction is, as opposed to whether it is right.
+///
+/// At initialisation this sits near `1/z` for a column of `z` cells. It rising is
+/// the earliest visible sign that a decoder is learning something, well before any
+/// accuracy metric moves.
+///
+/// Returns `None` for a `None` port, whose activations are empty.
+pub fn prediction_confidence(h: &Hierarchy, io: usize) -> Option<f32> {
+    let acts = h.get_prediction_acts(io);
+    if acts.is_empty() {
+        return None;
+    }
+
+    let z = h.get_io_size(io).z as usize;
+    if z == 0 || acts.len() % z != 0 {
+        return None;
+    }
+
+    let mut total = 0.0f32;
+    let columns = acts.len() / z;
+    for c in 0..columns {
+        let column = &acts[c * z..(c + 1) * z];
+        total += column.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    }
+
+    Some(total / columns as f32)
+}
+
+/// The critic's per-column value estimates for an Action port.
+///
+/// `Hierarchy::get_prediction_values` panics on anything but an Action port, so
+/// this guards rather than letting a caller find that out at runtime.
+pub fn action_values(h: &Hierarchy, io: usize) -> Option<&[f32]> {
+    if h.get_io_type(io) != IoType::Action {
+        return None;
+    }
+    Some(h.get_prediction_values(io))
+}
+
+/// Which layers ticked on the most recent step, and whether each is recurrent.
+///
+/// Only interesting when a demo sets `ticks_per_update > 1`: it shows the clockwork
+/// actually gating, which is this crate's own addition over upstream.
+pub fn layer_updates(h: &Hierarchy) -> Vec<(bool, bool)> {
+    (0..h.get_num_layers())
+        .map(|l| (h.get_update(l), h.is_layer_recurrent(l)))
+        .collect()
+}
 
 /// Weight level at which an input cell counts as learned rather than noise.
 ///
@@ -285,6 +398,99 @@ pub fn probe_receptive_fields(e: &Encoder, vli: usize) -> Vec<CellField> {
 mod tests {
     use super::*;
     use dcc_sph::helpers::{rand_get_state, set_global_state, Int3, VisibleLayerDesc};
+    use dcc_sph::hierarchy::{IoDesc, LayerDesc};
+
+    /// A hierarchy with one Prediction port, one Action port and one None port, so
+    /// every guard below has all three cases to fail on.
+    fn mixed_hierarchy() -> Hierarchy {
+        set_global_state(rand_get_state(99));
+        let io_descs = vec![
+            IoDesc { size: Int3::new(1, 1, 8), io_type: IoType::Prediction, ..Default::default() },
+            IoDesc { size: Int3::new(1, 1, 4), io_type: IoType::Action, ..Default::default() },
+            IoDesc { size: Int3::new(1, 1, 8), io_type: IoType::None, ..Default::default() },
+        ];
+        let layer_descs = vec![LayerDesc {
+            hidden_size: Int3::new(4, 4, 16),
+            ..Default::default()
+        }];
+        let mut h = Hierarchy::new();
+        h.init_random(&io_descs, &layer_descs);
+        h
+    }
+
+    fn step_n(h: &mut Hierarchy, n: usize) {
+        let a = vec![0i32; 1];
+        for _ in 0..n {
+            h.step(&[&a, &a, &a], true, 1.0, 0.0);
+        }
+    }
+
+    #[test]
+    fn actor_stats_only_answers_for_action_ports() {
+        let mut h = mixed_hierarchy();
+        step_n(&mut h, 4);
+
+        assert!(actor_stats(&h, 0).is_none(), "a Prediction port has no actor");
+        assert!(actor_stats(&h, 2).is_none(), "a None port has no actor");
+        assert!(actor_stats(&h, 1).is_some(), "the Action port should have one");
+    }
+
+    #[test]
+    fn history_fills_toward_capacity_and_stops() {
+        let mut h = mixed_hierarchy();
+
+        let before = actor_stats(&h, 1).unwrap();
+        assert_eq!(before.history_size, 0);
+        assert!(before.history_capacity > 0);
+
+        step_n(&mut h, 20);
+        let after = actor_stats(&h, 1).unwrap();
+        assert!(after.history_size > 0, "history never filled");
+        assert!(after.history_size <= after.history_capacity);
+        assert!((0.0..=1.0).contains(&after.history_fill()));
+    }
+
+    #[test]
+    fn actor_values_are_finite_and_ordered() {
+        let mut h = mixed_hierarchy();
+        step_n(&mut h, 30);
+        let s = actor_stats(&h, 1).unwrap();
+        assert!(s.mean_value.is_finite() && s.max_value.is_finite() && s.min_value.is_finite());
+        assert!(s.min_value <= s.mean_value && s.mean_value <= s.max_value);
+    }
+
+    #[test]
+    fn prediction_confidence_starts_near_chance_for_the_column_size() {
+        let mut h = mixed_hierarchy();
+        step_n(&mut h, 1);
+
+        // Port 0 has 8 cells per column, so an untrained softmax sits near 1/8.
+        let c = prediction_confidence(&h, 0).expect("Prediction port has activations");
+        assert!((0.0..=1.0).contains(&c), "confidence {c} out of range");
+        assert!(c > 1.0 / 8.0 * 0.5, "confidence {c} implausibly below chance");
+
+        // A None port produces no activations at all.
+        assert!(prediction_confidence(&h, 2).is_none());
+    }
+
+    #[test]
+    fn action_values_are_guarded_to_action_ports() {
+        let mut h = mixed_hierarchy();
+        step_n(&mut h, 4);
+
+        assert!(action_values(&h, 1).is_some());
+        // Unguarded, `get_prediction_values` panics on these two.
+        assert!(action_values(&h, 0).is_none());
+        assert!(action_values(&h, 2).is_none());
+    }
+
+    #[test]
+    fn layer_updates_reports_one_entry_per_layer() {
+        let mut h = mixed_hierarchy();
+        step_n(&mut h, 2);
+        let u = layer_updates(&h);
+        assert_eq!(u.len(), h.get_num_layers());
+    }
 
     fn train(steps: usize, target: (f32, f32)) -> Encoder {
         set_global_state(rand_get_state(1));

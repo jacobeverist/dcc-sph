@@ -23,8 +23,10 @@
 mod support;
 
 use support::args::Args;
+use support::checkpoint;
 use support::encode::bin_unit;
 use support::env::pusher::{build_hierarchy, Outcome, PusherWorld, ACTION_RES, SENSOR_RES};
+use support::probe;
 use support::report::Rolling;
 use support::metrics::{Recorder, Summary};
 use support::sweep;
@@ -89,6 +91,8 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     // Built in `support/env/pusher.rs` so a sweep drives the same configuration.
     let mut h = build_hierarchy();
+    // Resume from a checkpoint if one was given, before any training.
+    checkpoint::maybe_load(&mut h, args);
 
     let mut world = PusherWorld::new();
     world.timeout = timeout;
@@ -147,10 +151,20 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
         if every > 0 && (t + 1) % every == 0 {
             let per100k = 100_000.0 / every as f64;
+            // The actor's own view of the run: the critic's value estimate, and how
+            // full the credit-assignment history is. Learning only begins once that
+            // history passes `actor::Params::min_steps`, so a run that looks dead
+            // early is often just waiting for it to fill.
+            let actor = probe::actor_stats(&h, 1);
+            let critic = actor.map(|a| a.mean_value as f64).unwrap_or(f64::NAN);
+            let fill = actor.map(|a| a.history_fill() as f64).unwrap_or(f64::NAN);
+
             rec.sample(
                 t as u64 + 1,
                 &[
                     ("reward_ema", reward_ema.ema() as f64),
+                    ("critic_value", critic),
+                    ("history_fill", fill),
                     ("goals_per_100k", window_goals as f64 * per100k),
                     ("losses_per_100k", window_losses as f64 * per100k),
                 ],
@@ -210,6 +224,8 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
         );
         summary.verdict(false, "no clear improvement on the random baseline");
     }
+
+    checkpoint::maybe_save(&h, args);
 
     rec.finish_summary(&summary);
     summary

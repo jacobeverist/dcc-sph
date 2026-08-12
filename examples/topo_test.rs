@@ -15,7 +15,7 @@
 // would notice.
 //
 // Two deviations. Upstream reads a stored `vl.means` scalar, which this crate's
-// byte-weight ART encoder does not have — see `examples/support/encoder_probe.rs`.
+// byte-weight ART encoder does not have — see `examples/support/probe.rs`.
 // And upstream feeds points only from the cluster you select with the number keys;
 // headless, all clusters are sampled uniformly, which is what makes the topology
 // figure meaningful across the whole dataset rather than one blob at a time.
@@ -31,7 +31,7 @@ mod support;
 
 use support::args::Args;
 use support::encode::bin_unit;
-use support::encoder_probe::{probe_receptive_fields, CellField};
+use support::probe::{probe_receptive_fields, CellField};
 use support::env::cluster::{build_topo_encoder, gaussian_clusters};
 use support::report::{ascii_scatter, Bounds};
 use support::metrics::{Recorder, Summary};

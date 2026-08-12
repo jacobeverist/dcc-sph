@@ -25,6 +25,7 @@
 mod support;
 
 use support::args::Args;
+use support::checkpoint;
 use support::encode::bin_range;
 use support::env::wavy::{
     build_classify_hierarchy, WavyClassify, CLASS_COLUMN_SIZE as SIGNAL_COLUMN_SIZE, CLASS_MAX,
@@ -93,6 +94,8 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     // in doc/Demos.md: the exponential tick stack, and label importance defaulting
     // to 0.0 rather than upstream's 0.1.
     let mut h = build_classify_hierarchy(num_layers, label_importance);
+    // Resume from a checkpoint if one was given, before any training.
+    checkpoint::maybe_load(&mut h, args);
 
     let mut env = WavyClassify::new();
 
@@ -238,6 +241,8 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
         );
         summary.verdict(false, "settled accuracy is near chance");
     }
+
+    checkpoint::maybe_save(&h, args);
 
     rec.finish_summary(&summary);
     summary
