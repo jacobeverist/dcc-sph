@@ -334,6 +334,145 @@ fn angle_wrap(delta: f32) -> f32 {
 pub const OBS_RES: i32 = 16;
 pub const ACTION_RES: i32 = 5;
 
+/// Columns and resolution of the positional-memory port, for `cat_mouse_pos`.
+pub const MEMORY_COLUMNS: usize = 4;
+pub const MEMORY_RES: i32 = 16;
+
+/// A learned dead-reckoning estimate, held outside the hierarchy but driven
+/// entirely by it.
+///
+/// Ported from `Positional_Memory` in `demos/Cat_Mouse_Pos.cpp`. The hierarchy has
+/// a third Prediction port whose output is *not* compared against anything: instead
+/// each prediction nudges this accumulator, and what gets fed back in next step is
+/// the *difference* between the accumulator and that prediction. So the port has to
+/// learn to emit whatever increment keeps the estimate consistent with what the
+/// agent is seeing — position integrated from motion, learned end to end rather
+/// than supplied.
+///
+/// This is the only place in the suite where a port's own prediction becomes its
+/// next input, which is the reason the demo exists.
+pub struct PositionalMemory {
+    /// The accumulator, wrapped into `[0, 1)` per component.
+    pub memory: Vec<f32>,
+    /// What gets fed to the port next step.
+    pub cis: Vec<i32>,
+    /// How hard a prediction moves the accumulator. Upstream's `rate`.
+    pub rate: f32,
+    pub res: i32,
+}
+
+impl PositionalMemory {
+    pub fn new(size: usize, res: i32) -> Self {
+        PositionalMemory {
+            memory: vec![0.0; size],
+            cis: vec![0; size],
+            rate: 0.1,
+            res,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.memory.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.memory.is_empty()
+    }
+
+    /// Fold one step's predictions into the estimate and prepare the next input.
+    ///
+    /// Upstream, verbatim:
+    /// ```text
+    /// memory[i] = fmod(memory[i] + rate * (decoded * 2 - 1), 1.0);
+    /// if (memory[i] < 0) memory[i] += 1;
+    /// cis[i] = ((memory[i] - decoded) * 0.5 + 0.5) * (res - 1) + 0.5;
+    /// ```
+    /// Note `cis` carries the *residual* between the accumulator and the prediction,
+    /// not the accumulator itself — that is what gives the port an error signal to
+    /// work against rather than a copy of its own output.
+    pub fn update(&mut self, pred_cis: &[i32]) {
+        debug_assert_eq!(pred_cis.len(), self.memory.len());
+
+        for i in 0..self.memory.len() {
+            let decoded = pred_cis[i] as f32 / (self.res - 1) as f32;
+
+            self.memory[i] = (self.memory[i] + self.rate * (decoded * 2.0 - 1.0)) % 1.0;
+            if self.memory[i] < 0.0 {
+                self.memory[i] += 1.0;
+            }
+
+            let residual = (self.memory[i] - decoded) * 0.5 + 0.5;
+            self.cis[i] = (residual * (self.res - 1) as f32 + 0.5) as i32;
+            self.cis[i] = self.cis[i].clamp(0, self.res - 1);
+        }
+    }
+
+    /// Straight-line error between the estimate's first two components and a true
+    /// position normalised to `[0, 1)`. Wraps, since the estimate does.
+    pub fn position_error(&self, true_x: f32, true_y: f32) -> f32 {
+        let wrapped = |a: f32, b: f32| {
+            let d = (a - b).abs() % 1.0;
+            d.min(1.0 - d)
+        };
+        let dx = wrapped(self.memory[0], true_x);
+        let dy = wrapped(self.memory[1], true_y);
+        (dx * dx + dy * dy).sqrt()
+    }
+}
+
+/// The hierarchy `cat_mouse_pos` uses: the two ports of `cat_mouse` plus a third
+/// Prediction port carrying the positional memory.
+///
+/// Upstream passes six positional `IO_Desc` arguments — `(size, type, 4, 8, 2, 2)`
+/// — which is a 6-field variant, not mainline's 8-field order. Read against
+/// mainline that would set `value_size = 2`, which is nonsense. Mapped here to
+/// `num_dendrites_per_cell: 4, up_radius: 8, down_radius: 2` with the RL fields
+/// left at their defaults.
+pub fn build_pos_hierarchy(num_layers: usize) -> Hierarchy {
+    let io_descs = vec![
+        IoDesc {
+            size: Int3::new(7, 5, OBS_RES),
+            io_type: IoType::Prediction,
+            num_dendrites_per_cell: 4,
+            up_radius: 8,
+            down_radius: 2,
+            ..Default::default()
+        },
+        IoDesc {
+            size: Int3::new(1, ACTION_SIZE as i32, ACTION_RES),
+            io_type: IoType::Action,
+            num_dendrites_per_cell: 4,
+            up_radius: 8,
+            down_radius: 2,
+            ..Default::default()
+        },
+        IoDesc {
+            size: Int3::new(2, 2, MEMORY_RES),
+            io_type: IoType::Prediction,
+            num_dendrites_per_cell: 4,
+            up_radius: 8,
+            down_radius: 2,
+            ..Default::default()
+        },
+    ];
+
+    let layer_descs: Vec<LayerDesc> = (0..num_layers)
+        .map(|_| LayerDesc {
+            hidden_size: Int3::new(5, 5, 32),
+            num_dendrites_per_cell: 4,
+            up_radius: 2,
+            recurrent_radius: 0,
+            down_radius: 2,
+            ticks_per_update: 1,
+        })
+        .collect();
+
+    let mut h = Hierarchy::new();
+    h.init_random(&io_descs, &layer_descs);
+    h.params.ios[1].importance = 0.1;
+    h
+}
+
 /// One of the two identical hierarchies `cat_mouse` uses.
 ///
 /// Defined here so the windowed viewer drives exactly the same configuration.
@@ -460,6 +599,52 @@ mod tests {
                 env.reset(&mut rng);
             }
         }
+    }
+
+    #[test]
+    fn positional_memory_stays_wrapped_and_its_output_stays_in_range() {
+        let mut rng = Rng::new(41);
+        let mut m = PositionalMemory::new(MEMORY_COLUMNS, MEMORY_RES);
+
+        for _ in 0..5_000 {
+            let preds: Vec<i32> = (0..MEMORY_COLUMNS)
+                .map(|_| rng.below(MEMORY_RES as usize) as i32)
+                .collect();
+            m.update(&preds);
+
+            for &v in &m.memory {
+                assert!((0.0..1.0).contains(&v), "accumulator escaped [0,1): {v}");
+            }
+            for &c in &m.cis {
+                assert!((0..MEMORY_RES).contains(&c), "fed CI out of range: {c}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_constant_prediction_drives_the_estimate_in_one_direction() {
+        // The port emitting a high value should push the accumulator up, and a low
+        // one down. If that coupling breaks, the demo silently measures nothing.
+        let mut up = PositionalMemory::new(2, MEMORY_RES);
+        let mut down = PositionalMemory::new(2, MEMORY_RES);
+
+        // One step each, from 0.0, so wrapping cannot confuse the direction.
+        up.update(&[MEMORY_RES - 1, MEMORY_RES - 1]);
+        down.update(&[0, 0]);
+
+        // decoded = 1.0 -> +rate; decoded = 0.0 -> -rate, which wraps to near 1.
+        assert!(up.memory[0] > 0.0 && up.memory[0] < 0.5, "up went to {}", up.memory[0]);
+        assert!(down.memory[0] > 0.5, "down should wrap below zero, got {}", down.memory[0]);
+    }
+
+    #[test]
+    fn position_error_wraps_the_short_way_round() {
+        let mut m = PositionalMemory::new(2, MEMORY_RES);
+        m.memory[0] = 0.99;
+        m.memory[1] = 0.0;
+        // 0.99 and 0.01 are 0.02 apart across the wrap, not 0.98.
+        let e = m.position_error(0.01, 0.0);
+        assert!((e - 0.02).abs() < 1e-5, "error {e} did not wrap");
     }
 
     #[test]

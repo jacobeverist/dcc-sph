@@ -91,6 +91,7 @@ Each demo is also split into `run(args, seed, rec) -> Summary` and a `main` that
 | `ball_physics` | `demos/Ball_Physics.cpp` | `ImageEncoder` + `reconstruct()`, closed-loop generation |
 | `pusher` | `demos/Pusher.cpp` | `Actor`, multi-column action port, shaped reward |
 | `cat_mouse` | `demos/Cat_Mouse.cpp`, `demos/catmouse/CatMouseEnv.cpp` | **Two hierarchies**, zero-sum reward, `IoType::None` observation |
+| `cat_mouse_pos` | `demos/Cat_Mouse_Pos.cpp` | A port's own prediction fed back as its next input |
 | `car_racing` | `demos/Car_Racing.cpp` | `Actor` steering, raycast sensors, a real track asset |
 | `runner` | `demos/Runner_Run.cpp`, `demos/runner/Runner.cpp` | 8-motor articulated body, 24-column observation port |
 | `enc_vis` | `demos/EncVis.cpp` | Bare `Encoder`, receptive-field readout |
@@ -175,6 +176,23 @@ Typical result: 16 goals per 100k steps against 2 for random, losing the object 
 - **The curiosity reward is not ported.** It compares observations against `get_prediction_cis(0)`, and this crate returns an **empty slice** for an `IoType::None` port, so it would panic. It is commented out of the reward upstream anyway.
 
 Typical result over 250k decisions: capture rate 32.8% against 21.1% for random play, with mean steps-to-capture falling monotonically — the cat out-learning the mouse.
+
+### `cat_mouse_pos`
+
+The same chase as `cat_mouse` plus a third Prediction port whose output is never compared against anything. Each prediction nudges an accumulator, and what is fed back into the port next step is the **residual** between that accumulator and the prediction — so the port has to emit whatever increment keeps the estimate consistent with what the agent sees. Dead reckoning, learned end to end rather than supplied.
+
+This is the only demo where a port's own prediction becomes its next input, and the only one where the hierarchy maintains state outside itself.
+
+- **The `IO_Desc` arity had to be re-mapped.** Upstream passes six positional arguments — `IO_Desc(size, type, 4, 8, 2, 2)` — which is a 6-field variant, not mainline's 8-field order. Read against mainline that would set `value_size = 2`, which is nonsense. Mapped to `num_dendrites_per_cell: 4, up_radius: 8, down_radius: 2` with the RL fields left at their defaults.
+- Upstream's `map0.png` is missing, so the maze is generated as in `cat_mouse`.
+
+Typical result over 150k decisions: capture rate 35.9% against 11.8% for random movement, mean steps-to-capture falling from 313 to 243. The chase clearly works.
+
+**The `memory_error` figure needs reading narrowly.** It compares the estimate's first two components against the cat's normalised position, and it sits at 0.378 against a random-guess distance of 0.3826 — that is, at chance. But *nothing constrains the port to encode position in the frame that metric assumes*: a rotated, permuted, reflected or offset encoding would be just as useful to the agent and would still score at chance. The measurement shows the estimate is not a drop-in world position; it does not show the estimate carries no positional information. Upstream does not measure this at all, so there is no reference figure to compare against.
+
+The verdict is therefore decided on the chase, which depends on no such assumption. Whether the extra port *helps* is a third question again — run plain `cat_mouse` at the same seeds and compare `capture_rate`.
+
+The random-guess constant is derived rather than guessed: each wrapped axis difference is uniform on `[0, 0.5]`, so the expected distance is `0.5 · E[hypot(u, v)]` for `u, v ~ U(0, 1)`, which has the closed form `(√2 + ln(1 + √2)) / 3`, giving 0.3826. A 400k-sample simulation agrees to four places.
 
 ### `car_racing`
 

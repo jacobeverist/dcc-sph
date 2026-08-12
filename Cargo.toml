@@ -119,6 +119,9 @@ name = "pusher"
 name = "cat_mouse"
 
 [[example]]
+name = "cat_mouse_pos"
+
+[[example]]
 name = "car_racing"
 
 [[example]]
