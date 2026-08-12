@@ -134,6 +134,12 @@ name = "car_racing"
 name = "runner"
 
 [[example]]
+name = "stacking_rl"
+
+[[example]]
+name = "stacking_prog"
+
+[[example]]
 name = "cartpole_env_runner"
 required-features = ["gymnasium-examples"]
 

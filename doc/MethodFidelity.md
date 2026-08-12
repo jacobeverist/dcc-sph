@@ -57,9 +57,11 @@ A method-by-method comparison of the Rust `dcc_sph` crate against upstream **AOg
 | `step` | same | **DIVERGENT ⚠** | **The headline divergence.** C++ `645a54a` runs every layer every step (`for l …` unconditional) with temporal memory **only** from recurrence; Rust **adds clockwork tick-gating** (`if !updates[l] continue`) gating encoder-forward + decoder-learn while **also keeping recurrence** — a hybrid matching neither classic OgmaNeo nor `645a54a`. Anticipation/recurrence/routing otherwise faithful. |
 | `clear_state` | same | DIVERGENT | also resets tick state. |
 | `is_layer_recurrent` / `io_layer_exists` / `get_prediction_*` | same | FAITHFUL | 1:1 predicates/getters. |
-| `write`/`read` | same | DIVERGENT | Rust prepends magic+version and serializes tick state; C++ `memcpy`s `Layer_Params`/`IO_Params` whole; formats incompatible. |
+| `write`/`read` | same | DIVERGENT | Rust prepends magic+version and serializes tick state and the `top_feedback` flag; C++ `memcpy`s `Layer_Params`/`IO_Params` whole; formats incompatible. Version 2 — version 1 files are rejected, since `top_feedback` is structural and cannot be defaulted on read. |
 | `write_state`/`read_state`, `write_weights`/`read_weights` | same | FAITHFUL | same traversal order. |
 | — | tick state, `get_update`, `_mut` accessors | RUST-ONLY | the added clockwork + mutable accessors. |
+| — | `step_with_goal`, `LayerDesc::top_feedback`, `get_top_hidden_cis`, `get_top_hidden_size`, `has_top_feedback` | RUST-ONLY ⚠ | Goal conditioning: the top layer's decoders take an externally supplied goal CSDR in the second visible-layer slot that every lower layer fills with feedback from above. `645a54a` leaves that slot empty at the top; the nearest published shape is AOgmaNeo's `ubl3_recurrent` branch. `step` delegates with an empty goal, so the default path is untouched. **The fidelity harness cannot check this** — the golden fixture comes from C++ that has no goal path, so `tests/goal_conditioned.rs` is the only verification, and it pins the default path to hashes measured against the tree before the feature landed. See `doc/Divergences.md`. |
+| — | `Hierarchy: Clone` | RUST-ONLY | C++ gets copy construction for free (`aon::Hierarchy copy = h;` in `Stacking_Prog.cpp`); Rust has to ask for it. Used to roll a hierarchy forward speculatively without disturbing the live one. |
 | `get_num_encoder_visible_layers`, `get_num_decoders` | — | MISSING | minor accessors. |
 
 ## ImageEncoder (`image_encoder.rs`)

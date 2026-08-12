@@ -11,6 +11,6 @@ Docs for the `dcc_sph` crate — a Rust port of **SPH** (Sparse Predictive Hiera
 | [MethodFidelity.md](MethodFidelity.md) | Method-by-method comparison vs upstream C++ (faithful / divergent / missing / added). |
 | [UserGuide.md](UserGuide.md) | Concepts, public API, and the RL example. |
 | [Tuning.md](Tuning.md) | Parameter descriptions + tuning advice. |
-| [Demos.md](Demos.md) | The nine demos ported from Ogma's OgmaNeoDemos: what each one exercises, and every deviation from its source. |
+| [Demos.md](Demos.md) | The fifteen demos ported from Ogma's OgmaNeoDemos: what each one exercises, and every deviation from its source. |
 
 See also [`../README.md`](../README.md), [`../CLAUDE.md`](../CLAUDE.md) and [`../PROVENANCE.md`](../PROVENANCE.md). The dcc-core node wrappers live at [`engine/src/nodes/ports/sph/`](https://github.com/jacobeverist/dcc-core/tree/main/engine/src/nodes/ports/sph).

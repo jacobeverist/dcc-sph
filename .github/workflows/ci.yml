@@ -81,6 +81,12 @@ jobs:
           cargo run --release --example explore       -- --steps 2000 --cells 4 --quiet
           cargo run --release --example car_racing    -- --steps 3000 --baseline-steps 1000 --quiet
           cargo run --release --example runner        -- --steps 1000 --baseline-steps 500 --quiet
+          cargo run --release --example stacking_rl   -- --steps 3000 --baseline-steps 1000 --quiet
+          # Both goal routes, since `top` is the only demo path through
+          # `step_with_goal` and a build that broke it would otherwise still pass.
+          cargo run --release --example stacking_rl   -- --steps 2000 --baseline-steps 500 --goal-mode top --quiet
+          cargo run --release --example stacking_prog -- --steps 3000 --trials 10 --quiet
+          cargo run --release --example stacking_prog -- --steps 3000 --trials 10 --train-policy scripted --quiet
 
       # Metrics are what makes the step above worth more than an exit-code check:
       # a demo that trains to noise still exits 0, but its summary numbers do not

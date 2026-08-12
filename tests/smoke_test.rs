@@ -29,6 +29,7 @@ fn test_hierarchy_create_and_step() {
         recurrent_radius: -1, // no recurrence
         down_radius: 2,
         ticks_per_update: 1,
+        top_feedback: false,
     }];
 
     let mut h = Hierarchy::new();
@@ -79,6 +80,7 @@ fn test_hierarchy_two_layers() {
             recurrent_radius: -1,
             down_radius: 2,
             ticks_per_update: 1,
+            top_feedback: false,
         },
         LayerDesc {
             hidden_size: Int3::new(3, 3, 16),
@@ -87,6 +89,7 @@ fn test_hierarchy_two_layers() {
             recurrent_radius: -1,
             down_radius: 2,
             ticks_per_update: 1,
+            top_feedback: false,
         },
     ];
 
@@ -129,6 +132,7 @@ fn test_hierarchy_clear_state() {
         recurrent_radius: -1,
         down_radius: 2,
         ticks_per_update: 1,
+        top_feedback: false,
     }];
 
     let mut h = Hierarchy::new();
@@ -175,6 +179,7 @@ fn test_multiple_io() {
         recurrent_radius: -1,
         down_radius: 2,
         ticks_per_update: 1,
+        top_feedback: false,
     }];
 
     let mut h = Hierarchy::new();
@@ -255,6 +260,7 @@ fn test_hierarchy_serialization_roundtrip() {
         recurrent_radius: -1,
         down_radius: 2,
         ticks_per_update: 1,
+        top_feedback: false,
     }];
 
     let mut h = Hierarchy::new();
@@ -324,6 +330,7 @@ fn test_io_type_none_no_prediction() {
         recurrent_radius: -1,
         down_radius: 2,
         ticks_per_update: 1,
+        top_feedback: false,
     }];
 
     let mut h = Hierarchy::new();
@@ -372,6 +379,7 @@ fn test_recurrent_layers() {
             recurrent_radius: 2, // recurrent connections enabled
             down_radius: 2,
             ticks_per_update: 1,
+            top_feedback: false,
         },
         LayerDesc {
             hidden_size: Int3::new(3, 3, 8),
@@ -380,6 +388,7 @@ fn test_recurrent_layers() {
             recurrent_radius: 1,
             down_radius: 2,
             ticks_per_update: 2,
+            top_feedback: false,
         },
     ];
 
@@ -467,6 +476,7 @@ fn test_prediction_improves_on_repeating_sequence() {
         recurrent_radius: -1,
         down_radius: 2,
         ticks_per_update: 1,
+        top_feedback: false,
     }];
 
     let mut h = Hierarchy::new();

@@ -97,6 +97,7 @@ pub fn run_scenario() -> ScenarioOutput {
             recurrent_radius: -1, // recurrence off
             down_radius: 2,
             ticks_per_update: 1, // faithful regime: tick-gating disabled
+            top_feedback: false, // faithful regime: no goal path exists in the C++
         })
         .collect();
 

@@ -28,6 +28,18 @@ Surfaced by [MethodFidelity.md](MethodFidelity.md) — the two genuine math diff
 - **Ticked clockwork temporal memory (`ticks_per_update`).** The crate implements per-layer tick gating (`hierarchy.rs` — `ticks` / `ticks_per_update` / `updates`), but upstream `645a54a` has **no `ticks_per_update` or `temporal_horizon`** (0 references) — it carries **recurrence only** (`recurrent_radius` + `feedback_cis_prev`, present in *both*). So on the temporal axis the crate is a **superset**: recurrence (faithful) **plus** ticks (extra).
   - **Status: DEFERRED** (2026-07-04). Kept as-is for now — both mechanisms stay live and can be combined. The keep-as-intentional-extension vs remove-to-match-`645a54a` decision is postponed; **not** an active task.
 
+- **Goal-conditioned step (`LayerDesc::top_feedback`, `Hierarchy::step_with_goal`).** Every layer but the top takes a second visible layer on its decoder carrying feedback from the layer above. The top layer has nothing above it, so `645a54a` gives its decoder a single visible layer — the `else` arm commented "top layer: no feedback second input". Setting `top_feedback` fills that slot from outside instead, with a goal CSDR over the top encoder's hidden columns, which is what makes "get the hierarchy into *this* state" expressible at all. `get_top_hidden_cis` returns a buffer in exactly that form, so a state the hierarchy has actually been in can be replayed as a goal.
+
+  The nearest published upstream is AOgmaNeo's **`ubl3_recurrent`** branch, whose `step` takes `Int_Buffer_View top_feedback_cis` — the same shape. It is not on mainline, and `645a54a` has no such path.
+
+  Three details are decisions rather than transcriptions, because there is nothing to transcribe from:
+
+  - **Learning pairs the goal with the *previous* step's**, matching how feedback from the layer above is paired everywhere else: the decoder is corrected against the goal that was current when it made the prediction. The incoming goal is used for the activate pass only.
+  - **The anticipation pass runs at the top layer too** once the slot exists, substituting the layer's own current hidden CIs for the goal, exactly as it does at every other layer. Uniformity was chosen over a special case; there is no reference for the combination either way.
+  - **The flag lives on `LayerDesc`, not `Params`,** because it changes decoder arity and so is fixed at `init_random`. It is only meaningful on the topmost layer, and `init_random` asserts rather than ignoring it elsewhere — a silently-ignored structural flag is worse than a panic.
+
+  **Status: RUST-ONLY, and the fidelity harness cannot check it.** The golden fixture is generated from C++ at `645a54a`, which has no goal path, so there is nothing to diff against; `tests/goal_conditioned.rs` carries the whole verification burden. Default is `false`, and `tests/goal_conditioned.rs::default_path_is_bit_identical` pins that claim to two hashes measured against the tree immediately before the feature landed — a real before/after comparison, not a snapshot of current behaviour. `SERIAL_VERSION` went 1 → 2: the flag is structural, cannot be defaulted on read, and version 1 files are rejected rather than guessed at.
+
 ## Faithfully ported — confirmed present in upstream `645a54a` (NOT divergences)
 
 Verified in the C++ source: `recurrent_radius`, `recurrent_importance`, `anticipation`, `smoothing`, `td_scale_decay`, `value_range`, `min_steps`, `history_iters`. (These were *not* Rust-only additions — earlier catalogs inferred that from stale upstream **docs**, not the source.)

@@ -46,6 +46,7 @@ pub fn build_line_hierarchy(num_inputs: usize) -> Hierarchy {
         recurrent_radius: 0,
         down_radius: 2,
         ticks_per_update: 1,
+        top_feedback: false,
     }];
 
     let mut h = Hierarchy::new();
@@ -84,6 +85,7 @@ pub fn build_classify_hierarchy(num_layers: usize, label_importance: f32) -> Hie
             recurrent_radius: 0,
             down_radius: 2,
             ticks_per_update: 1usize << l,
+            top_feedback: false,
         })
         .collect();
 

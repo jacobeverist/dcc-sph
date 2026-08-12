@@ -455,6 +455,7 @@ pub fn build_explore_hierarchy() -> Hierarchy {
         recurrent_radius: 0,
         down_radius: 2,
         ticks_per_update: 1,
+        top_feedback: false,
     }];
 
     let mut h = Hierarchy::new();
@@ -578,6 +579,7 @@ pub fn build_pos_hierarchy(num_layers: usize) -> Hierarchy {
             recurrent_radius: 0,
             down_radius: 2,
             ticks_per_update: 1,
+            top_feedback: false,
         })
         .collect();
 
@@ -611,6 +613,7 @@ pub fn build_hierarchy() -> Hierarchy {
         recurrent_radius: 0,
         down_radius: 2,
         ticks_per_update: 1,
+        top_feedback: false,
     }];
 
     let mut h = Hierarchy::new();

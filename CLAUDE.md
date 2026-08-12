@@ -72,7 +72,8 @@ examples/
   support/                — shared demo scaffolding (see below)
   wavy_line.rs, wavy_classify.rs, ball_physics.rs, video_prediction.rs,
   vsa_char.rs, pusher.rs, cat_mouse.rs, cat_mouse_pos.rs, explore.rs,
-  car_racing.rs, runner.rs, enc_vis.rs, topo_test.rs
+  car_racing.rs, runner.rs, enc_vis.rs, topo_test.rs,
+  stacking_rl.rs, stacking_prog.rs
                           — ported from OgmaNeoDemos; see doc/Demos.md
 examples-viz/             — SEPARATE CRATE; macroquad lives here, not in the library
   examples/
@@ -82,7 +83,7 @@ assets/                   — the two track bitmaps car_racing needs
 
 ### Demos
 
-Thirteen demos ported from [OgmaNeoDemos](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo) (Ogma's own, same CC BY-NC-SA 4.0 licence — attribution is in `PROVENANCE.md`). **[`doc/Demos.md`](doc/Demos.md) is the reference**: it records each demo's upstream source and every deviation from it, and several of those deviations are load-bearing rather than cosmetic.
+Fifteen demos ported from [OgmaNeoDemos](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo) (Ogma's own, same CC BY-NC-SA 4.0 licence — attribution is in `PROVENANCE.md`). **[`doc/Demos.md`](doc/Demos.md) is the reference**: it records each demo's upstream source and every deviation from it, and several of those deviations are load-bearing rather than cosmetic.
 
 They **run headless and text-only with no features enabled**, which is the default path and the one CI runs. Keep it that way — the windowed viewer exists so a demo can be eyeballed, not as instrumentation. Real visualisation is dcc-dashboard's job, and `examples/support/viz.rs` should stay at five functions.
 

@@ -97,6 +97,7 @@ fn main() -> PyResult<()> {
             recurrent_radius: -1,
             down_radius: 2,
             ticks_per_update: 1,
+            top_feedback: false,
         },
         LayerDesc {
             hidden_size: Int3::new(5, 5, 64),
@@ -105,6 +106,7 @@ fn main() -> PyResult<()> {
             recurrent_radius: -1,
             down_radius: 2,
             ticks_per_update: 2,
+            top_feedback: false,
         },
     ];
 

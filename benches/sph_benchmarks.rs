@@ -31,6 +31,7 @@ fn build(io_cols: i32, io_cells: i32, hidden: i32, hidden_cells: i32, num_layers
             recurrent_radius: -1,
             down_radius: 2,
             ticks_per_update: 1,
+            top_feedback: false,
         })
         .collect();
     let mut h = Hierarchy::new();

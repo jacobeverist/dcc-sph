@@ -11,7 +11,11 @@ use crate::actor::{Actor, VisibleLayerDesc as ActorVLD, Params as ActorParams};
 const SERIAL_MAGIC: u32 = 0x4d474f41;
 
 /// Binary format version. Increment when the serialised layout changes.
-const SERIAL_VERSION: u32 = 1;
+///
+/// Version 2 appends the [`Hierarchy::has_top_feedback`] flag. It is structural —
+/// it decides the top layer's decoder arity — so it cannot be defaulted on read,
+/// and [`Hierarchy::read`] rejects version 1 files rather than guessing.
+const SERIAL_VERSION: u32 = 2;
 
 /// Determines how the [`Hierarchy`] processes a particular IO port.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -98,6 +102,22 @@ pub struct LayerDesc {
     /// encoder. Layer 0 always runs every tick regardless of this value.
     /// Default: `1` (every tick, same behaviour as before this feature was added).
     pub ticks_per_update: usize,
+    /// Give the **topmost** layer's decoders (and actors) a second visible layer
+    /// carrying an externally supplied goal CSDR, turning the hierarchy
+    /// goal-conditioned. Drive it with [`Hierarchy::step_with_goal`].
+    ///
+    /// RUST-ONLY, and structural: it changes decoder arity, which is fixed at
+    /// [`Hierarchy::init_random`] time. Default `false`, which is bit-identical to
+    /// a hierarchy built before this field existed.
+    ///
+    /// Every layer below the top already receives feedback from the layer above
+    /// it; the top layer is the only one with nothing above to take it from, and
+    /// this fills that slot from outside. Setting it on any layer other than the
+    /// last is a mistake rather than a no-op, and `init_random` asserts on it.
+    ///
+    /// See `doc/Divergences.md` — the C++ at `645a54a` has no such path, so the
+    /// fidelity harness cannot check it.
+    pub top_feedback: bool,
 }
 
 impl Default for LayerDesc {
@@ -109,6 +129,7 @@ impl Default for LayerDesc {
             recurrent_radius: 0,
             down_radius: 2,
             ticks_per_update: 1,
+            top_feedback: false,
         }
     }
 }
@@ -196,7 +217,7 @@ pub struct Params {
 /// h.step(&[&input], true, 0.0, 0.0);
 /// let prediction = h.get_prediction_cis(0);
 /// ```
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Hierarchy {
     encoders: Vec<Encoder>,
     decoders: Vec<Vec<Decoder>>, // decoders[layer][d_index]
@@ -214,6 +235,9 @@ pub struct Hierarchy {
     updates: Vec<bool>,
     /// Number of bottom-layer ticks between updates for each layer.
     ticks_per_update: Vec<usize>,
+    /// Whether the top layer's decoders take an externally supplied goal CSDR as a
+    /// second visible layer. Set from the topmost [`LayerDesc::top_feedback`].
+    top_feedback: bool,
     /// Runtime hyperparameters. Adjustable between steps.
     pub params: Params,
 }
@@ -232,10 +256,26 @@ impl Hierarchy {
         let num_layers = layer_descs.len();
         let num_io = io_descs.len();
 
+        // Goal conditioning is a property of the top layer only — every layer below
+        // it already has a real layer above supplying feedback. Setting the flag
+        // lower down would be silently ignored, so reject it instead.
+        for (l, d) in layer_descs.iter().enumerate() {
+            assert!(
+                !d.top_feedback || l + 1 == num_layers,
+                "LayerDesc::top_feedback is only meaningful on the topmost layer \
+                 (set on layer {l} of {num_layers}); layers below the top already \
+                 take feedback from the layer above them"
+            );
+        }
+        self.top_feedback = layer_descs.last().is_some_and(|d| d.top_feedback);
+
         self.encoders = vec![Encoder::default(); num_layers];
         self.decoders = vec![Vec::new(); num_layers];
         self.hidden_cis_prev = vec![Vec::new(); num_layers];
-        self.feedback_cis_prev = vec![Vec::new(); num_layers.saturating_sub(1)];
+        // One slot per layer, including the top: with `top_feedback` the top slot
+        // holds the goal supplied on the previous step, which is what the decoder
+        // learns against. Without it the top slot is simply never read.
+        self.feedback_cis_prev = vec![Vec::new(); num_layers];
 
         self.io_sizes = io_descs.iter().map(|d| d.size).collect();
         self.io_types = io_descs.iter().map(|d| d.io_type as u8).collect();
@@ -260,8 +300,17 @@ impl Hierarchy {
         self.d_indices = vec![-1i32; num_io];
         self.actors = Vec::with_capacity(num_actions);
 
+        let top_feedback = self.top_feedback;
+
         for l in 0..num_layers {
             let mut e_vld: Vec<EncoderVLD> = Vec::new();
+
+            // Does this layer's decoder (or actor) take a second visible layer?
+            // Below the top that is feedback from the layer above; at the top it is
+            // the goal, and only when the hierarchy was built goal-conditioned.
+            // Either way the second layer has the same size as the first, so the
+            // `d_vld[0].clone()` below stays correct in both cases.
+            let has_feedback = l + 1 < num_layers || top_feedback;
 
             if l == 0 {
                 // First layer: one visible input per IO
@@ -281,13 +330,13 @@ impl Hierarchy {
 
                 for i in 0..num_io {
                     if io_descs[i].io_type == IoType::Prediction {
-                        let num_d_vl = 1 + if l < num_layers - 1 { 1 } else { 0 };
+                        let num_d_vl = 1 + usize::from(has_feedback);
                         let mut d_vld: Vec<DecoderVLD> = Vec::with_capacity(num_d_vl);
                         d_vld.push(DecoderVLD {
                             size: layer_descs[l].hidden_size,
                             radius: io_descs[i].down_radius,
                         });
-                        if l < num_layers - 1 {
+                        if has_feedback {
                             d_vld.push(d_vld[0].clone());
                         }
 
@@ -309,13 +358,13 @@ impl Hierarchy {
                 let mut a_index = 0usize;
                 for i in 0..num_io {
                     if io_descs[i].io_type == IoType::Action {
-                        let num_a_vl = 1 + if l < num_layers - 1 { 1 } else { 0 };
+                        let num_a_vl = 1 + usize::from(has_feedback);
                         let mut a_vld: Vec<ActorVLD> = Vec::with_capacity(num_a_vl);
                         a_vld.push(ActorVLD {
                             size: layer_descs[l].hidden_size,
                             radius: io_descs[i].down_radius,
                         });
-                        if l < num_layers - 1 {
+                        if has_feedback {
                             a_vld.push(a_vld[0].clone());
                         }
 
@@ -354,13 +403,13 @@ impl Hierarchy {
                 });
 
                 // Single decoder per higher layer
-                let num_d_vl = 1 + if l < num_layers - 1 { 1 } else { 0 };
+                let num_d_vl = 1 + usize::from(has_feedback);
                 let mut d_vld: Vec<DecoderVLD> = Vec::with_capacity(num_d_vl);
                 d_vld.push(DecoderVLD {
                     size: layer_descs[l].hidden_size,
                     radius: layer_descs[l].down_radius,
                 });
-                if l < num_layers - 1 {
+                if has_feedback {
                     d_vld.push(d_vld[0].clone());
                 }
 
@@ -384,7 +433,7 @@ impl Hierarchy {
 
             self.hidden_cis_prev[l] = self.encoders[l].get_hidden_cis().to_vec();
 
-            if l < num_layers - 1 {
+            if has_feedback {
                 self.feedback_cis_prev[l] = self.encoders[l].get_hidden_cis().to_vec();
             }
         }
@@ -401,6 +450,11 @@ impl Hierarchy {
     /// - `learn_enabled` — if `false`, all weight updates are skipped.
     /// - `reward` — scalar reward for RL (passed to all [`Actor`] modules).
     /// - `mimic` — imitation-learning signal for actors. Pass `0.0` for pure RL.
+    ///
+    /// # Panics
+    /// Panics if this hierarchy was built with [`LayerDesc::top_feedback`]; use
+    /// [`step_with_goal`](Self::step_with_goal) instead, which is the only way to
+    /// supply the goal such a hierarchy requires.
     pub fn step(
         &mut self,
         input_cis: &[&[i32]],
@@ -408,8 +462,57 @@ impl Hierarchy {
         reward: f32,
         mimic: f32,
     ) {
+        self.step_with_goal(input_cis, &[], learn_enabled, reward, mimic);
+    }
+
+    /// Run one timestep of a goal-conditioned hierarchy.
+    ///
+    /// RUST-ONLY. Identical to [`step`](Self::step) except that `top_feedback_cis`
+    /// is fed to the topmost layer's decoders (and actors) as their second visible
+    /// layer — the slot every lower layer fills with feedback from the layer above
+    /// it, which the top layer has no source for. The goal is a CSDR over the top
+    /// encoder's hidden columns: one column index per column, so its length is
+    /// [`get_top_hidden_size`](Self::get_top_hidden_size)`.x * .y` and each entry is
+    /// below `.z`. [`get_top_hidden_cis`](Self::get_top_hidden_cis) returns exactly
+    /// such a buffer, which is how a goal is usually obtained.
+    ///
+    /// Learning pairs the goal with the *previous* step's, matching how feedback
+    /// from the layer above is paired at every other layer: the decoder learns from
+    /// the goal that was current when it made the prediction being corrected.
+    ///
+    /// # Panics
+    /// Panics if the hierarchy was built goal-conditioned and `top_feedback_cis` is
+    /// the wrong length, or if it was not and `top_feedback_cis` is non-empty.
+    pub fn step_with_goal(
+        &mut self,
+        input_cis: &[&[i32]],
+        top_feedback_cis: &[i32],
+        learn_enabled: bool,
+        reward: f32,
+        mimic: f32,
+    ) {
         let num_layers = self.encoders.len();
         let num_io = self.io_sizes.len();
+
+        if self.top_feedback {
+            let expected = self.get_top_hidden_size();
+            let expected_len = (expected.x * expected.y) as usize;
+            assert_eq!(
+                top_feedback_cis.len(),
+                expected_len,
+                "goal-conditioned hierarchy: expected a {expected_len}-column goal \
+                 CSDR for the top layer, got {}. A plain `step` supplies none at \
+                 all — call `step_with_goal`.",
+                top_feedback_cis.len()
+            );
+        } else {
+            assert!(
+                top_feedback_cis.is_empty(),
+                "this hierarchy was not built with LayerDesc::top_feedback, so it \
+                 has nowhere to put a goal; rebuild it with the flag set on the \
+                 topmost layer"
+            );
+        }
 
         // Update tick counters and determine which layers run this step.
         // Layer 0 always runs.
@@ -438,7 +541,11 @@ impl Hierarchy {
             // Copy previous hidden CIS
             self.hidden_cis_prev[l] = self.encoders[l].get_hidden_cis().to_vec();
 
-            if l < num_layers - 1 {
+            // Below the top, snapshot the layer above's decoder output from the
+            // previous step. At the top, `feedback_cis_prev` already holds the
+            // previous step's goal; it is refreshed at the end of this method,
+            // after the backward pass has used both it and the incoming goal.
+            if l + 1 < num_layers {
                 self.feedback_cis_prev[l] =
                     self.decoders[l + 1][0].get_hidden_cis().to_vec();
             }
@@ -474,14 +581,17 @@ impl Hierarchy {
 
         // --- Backward pass ---
         for l in (0..num_layers).rev() {
+            let has_feedback = l + 1 < num_layers || self.top_feedback;
+
             if learn_enabled && self.updates[l] {
                 // Build learn input_cis (prev hidden state)
-                let num_dec_vl = 1 + if l < num_layers - 1 { 1 } else { 0 };
+                let num_dec_vl = 1 + usize::from(has_feedback);
                 let mut layer_input_cis_owned: Vec<Vec<i32>> = Vec::with_capacity(num_dec_vl);
                 layer_input_cis_owned.push(self.hidden_cis_prev[l].clone());
 
-                if l < num_layers - 1 {
-                    // learn on feedback
+                if has_feedback {
+                    // learn on feedback — from the layer above, or on the previous
+                    // goal at the top of a goal-conditioned hierarchy
                     layer_input_cis_owned.push(self.feedback_cis_prev[l].clone());
                     let layer_input_refs: Vec<&[i32]> =
                         layer_input_cis_owned.iter().map(|v| v.as_slice()).collect();
@@ -529,7 +639,9 @@ impl Hierarchy {
                         }
                     }
                 } else {
-                    // top layer: no feedback second input
+                    // top layer of a hierarchy built without `top_feedback`: the
+                    // decoder has a single visible layer and nothing to pair with
+                    // it, so there is no anticipation pass either
                     let layer_input_refs: Vec<&[i32]> =
                         layer_input_cis_owned.iter().map(|v| v.as_slice()).collect();
 
@@ -553,13 +665,17 @@ impl Hierarchy {
 
             // Build activate input_cis (current encoder output)
             // (always run activate regardless of updates[l] so predictions stay fresh)
-            let num_dec_vl = 1 + if l < num_layers - 1 { 1 } else { 0 };
+            let num_dec_vl = 1 + usize::from(has_feedback);
             let mut layer_input_cis_owned: Vec<Vec<i32>> = Vec::with_capacity(num_dec_vl);
             layer_input_cis_owned.push(self.encoders[l].get_hidden_cis().to_vec());
 
-            if l < num_layers - 1 {
+            if l + 1 < num_layers {
                 layer_input_cis_owned
                     .push(self.decoders[l + 1][0].get_hidden_cis().to_vec());
+            } else if self.top_feedback {
+                // The goal as of *this* step: the decoder is being asked what to
+                // predict given where it is and where it is being sent.
+                layer_input_cis_owned.push(top_feedback_cis.to_vec());
             }
 
             let layer_input_refs: Vec<&[i32]> =
@@ -591,6 +707,15 @@ impl Hierarchy {
                     );
                 }
             }
+        }
+
+        // The goal just used becomes the "previous" goal the next learn pass pairs
+        // against — the same one-step lag the feedback snapshot above applies to
+        // every other layer. Gated on the top layer having actually run, so a
+        // tick-gated top layer sees the goal that was current at its own last
+        // update rather than one from a step it slept through.
+        if self.top_feedback && self.updates[num_layers - 1] {
+            self.feedback_cis_prev[num_layers - 1] = top_feedback_cis.to_vec();
         }
     }
 
@@ -662,6 +787,32 @@ impl Hierarchy {
     /// Return the number of encoder layers.
     pub fn get_num_layers(&self) -> usize {
         self.encoders.len()
+    }
+
+    /// Return the topmost encoder's hidden CSDR.
+    ///
+    /// RUST-ONLY. This is the hierarchy's most abstract summary of its own recent
+    /// history, and it is the buffer a goal for
+    /// [`step_with_goal`](Self::step_with_goal) is expressed in — feeding one back
+    /// as a goal is what makes "get the hierarchy into *this* state" expressible.
+    pub fn get_top_hidden_cis(&self) -> &[i32] {
+        self.encoders[self.encoders.len() - 1].get_hidden_cis()
+    }
+
+    /// Return the topmost encoder's hidden size.
+    ///
+    /// RUST-ONLY. `x * y` is the length of a goal CSDR and `z` bounds each of its
+    /// entries — the two numbers needed to synthesise one rather than read it from
+    /// [`get_top_hidden_cis`](Self::get_top_hidden_cis).
+    pub fn get_top_hidden_size(&self) -> Int3 {
+        self.encoders[self.encoders.len() - 1].get_hidden_size()
+    }
+
+    /// Return `true` if this hierarchy was built goal-conditioned, and so must be
+    /// driven with [`step_with_goal`](Self::step_with_goal) rather than
+    /// [`step`](Self::step).
+    pub fn has_top_feedback(&self) -> bool {
+        self.top_feedback
     }
 
     /// Return the number of IO ports.
@@ -754,6 +905,9 @@ impl Hierarchy {
         writer.write_i32(num_io);
         writer.write_i32(num_predictions);
         writer.write_i32(num_actions);
+        // Structural, not a parameter: it decides the top layer's decoder arity, so
+        // it has to be known before the decoders below are read back.
+        writer.write_u8(u8::from(self.top_feedback));
 
         for sz in &self.io_sizes {
             writer.write_int3(*sz);
@@ -832,6 +986,7 @@ impl Hierarchy {
         let num_io = reader.read_i32() as usize;
         let num_predictions = reader.read_i32() as usize;
         let num_actions = reader.read_i32() as usize;
+        self.top_feedback = reader.read_u8() != 0;
 
         self.io_sizes = (0..num_io).map(|_| reader.read_int3()).collect();
         self.io_types = (0..num_io).map(|_| reader.read_u8()).collect();
@@ -850,7 +1005,7 @@ impl Hierarchy {
         self.encoders = vec![Encoder::default(); num_layers];
         self.decoders = vec![Vec::new(); num_layers];
         self.hidden_cis_prev = vec![Vec::new(); num_layers];
-        self.feedback_cis_prev = vec![Vec::new(); num_layers.saturating_sub(1)];
+        self.feedback_cis_prev = vec![Vec::new(); num_layers];
 
         for l in 0..num_layers {
             self.encoders[l].read(reader);
@@ -864,7 +1019,7 @@ impl Hierarchy {
             }
 
             self.hidden_cis_prev[l] = self.encoders[l].get_hidden_cis().to_vec();
-            if l < num_layers - 1 {
+            if l + 1 < num_layers || self.top_feedback {
                 self.feedback_cis_prev[l] = self.encoders[l].get_hidden_cis().to_vec();
             }
         }

@@ -192,6 +192,7 @@ pub fn build() -> (ImageEncoder, Hierarchy) {
             recurrent_radius: 0,
             down_radius: 2,
             ticks_per_update: 1,
+            top_feedback: false,
         })
         .collect();
 

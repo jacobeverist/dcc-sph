@@ -1,6 +1,6 @@
 # Demos
 
-Thirteen demos ported from [`jacobeverist/OgmaNeoDemos`](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo) (branch `aogmaneo`), Ogma Intelligent Systems Corp, CC BY-NC-SA 4.0 — the same licence as this crate. The attribution required by §3(a) is in [`PROVENANCE.md`](../PROVENANCE.md); this file is the engineering half, recording what each demo does and where it departs from its source.
+Fifteen demos ported from [`jacobeverist/OgmaNeoDemos`](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo) (branch `aogmaneo`), Ogma Intelligent Systems Corp, CC BY-NC-SA 4.0 — the same licence as this crate. The attribution required by §3(a) is in [`PROVENANCE.md`](../PROVENANCE.md); this file is the engineering half, recording what each demo does and where it departs from its source.
 
 They all **run headless and text-only with no features enabled**. That is the default path and the one CI builds. A windowed viewer lives in the separate `examples-viz` crate for the demos where motion is the point; it exists so a demo can be eyeballed quickly, not as instrumentation — that is dcc-dashboard's job.
 
@@ -104,7 +104,7 @@ Each demo is also split into `run(args, seed, rec) -> Summary` and a `main` that
 
 `examples/support/` holds everything shared: argument parsing, CSDR encoding, text reporting, the RNG wrapper, the encoder probe, and one module per environment. Cargo examples cannot depend on each other, so each demo pulls it in with `#[path = "support/mod.rs"] mod support;` — the idiom `examples/fidelity_dump.rs` already uses for `tests/support/`. A directory under `examples/` with no `main.rs` is not auto-discovered, so `support/` is not itself a target.
 
-Example targets default to `test = false`, so `#[cfg(test)]` code inside them never runs. `tests/demos_support.rs` includes the same tree, which compiles it in test configuration and runs its unit tests as part of `cargo test` — 63 of them, covering the encoding helpers, the reporting primitives, every environment's physics and the encoder probe.
+Example targets default to `test = false`, so `#[cfg(test)]` code inside them never runs. `tests/demos_support.rs` includes the same tree, which compiles it in test configuration and runs its unit tests as part of `cargo test` — 126 of them, covering the encoding helpers, the reporting primitives, the hypervector algebra, every environment's physics and the encoder probe.
 
 ## Cross-cutting decisions
 
@@ -261,6 +261,60 @@ This is by far the hardest problem in the suite: a gait has to be discovered fro
 
 Typical result over 200k control steps, with the furthest point reached in each window: 3.8 m → 6.3 m → 14.8 m → 20.2 m, mean velocity −0.11 → +0.70 m/s, resets falling from 6.1 to 1.7 per 1000 steps. Against a random baseline of 0.99 m. Almost all resets are hurdle collisions rather than stalls, which is the signature of a body that is actually travelling.
 
+### `stacking_rl` and `stacking_prog`
+
+Three blocks, three columns, a grabber that carries one at a time, and four actions: do nothing, grab-or-place, left, right. A target configuration is shown and the job is to build it. The world is thirty lines and deliberately trivial — the interest is entirely in *how the target is communicated*, which is what both demos are about and what nothing else in the suite does.
+
+Both upstream files call a three-argument `step` that mainline AOgmaNeo does not have. Reading the two sources side by side, they do not call the *same* one:
+
+| | Upstream's goal argument | Status |
+|---|---|---|
+| `Stacking_Prog.cpp` | `Int_Buffer goalCIs = h.get_top_hidden_cis();` — a single buffer over the top layer's hidden columns | Published, on AOgmaNeo's `ubl3_recurrent` branch |
+| `Stacking_RL.cpp` | `Array<S32_Array_View> goalCIs(ioDescs.size());` — one goal buffer **per IO port**, of which only `goalCIs[0]` is filled | On no published branch; even the `S32_Array` naming belongs to a revision mainline has never used |
+
+So only one of them can be ported faithfully. `Stacking_Prog`'s signature became [`Hierarchy::step_with_goal`](Divergences.md) — the RUST-ONLY goal path, and the only reason it exists. `Stacking_RL`'s has to be approximated, and rather than pick an approximation silently the demo offers both and makes it a measurement.
+
+#### `stacking_rl`
+
+An actor on IO port 1, reward = (fraction of grid cells matching the target)³, exactly upstream's `reward *= reward * reward`. `--goal-mode` selects how the target is delivered:
+
+- **`port`** (default) — a fourth IO port carrying the target grid, `IoType::None` so it is conditioned on and never predicted. This is the closest mainline expression of a per-IO-port goal array, and it needs no goal path at all.
+- **`top`** — the target grid distilled to a top-layer CSDR and passed to `step_with_goal`, the same distillation `stacking_prog` uses.
+
+Deviations:
+
+- **The target is re-drawn on a fixed schedule (`--episode`, default 300 steps)** rather than upstream's 10%-per-rendered-frame. Same idea, but it makes "how well was this target built" a per-episode number instead of a smear.
+- **The world is not reset between targets**, as upstream never resets it: the agent rebuilds from wherever the last target left the blocks.
+- **A scripted solver was added** — RUST-ONLY, never visible to the hierarchy — purely to report the ceiling. It is load-bearing for reading the result at all: **random actions already score 0.70 on match fraction**, because most cells are empty in both grids and agree by default. A headline of "0.80 match" sounds like competence and is mostly arithmetic. The demo therefore reports `gap_closed`, the fraction of the distance between random play and a perfect solver that was actually covered.
+- **Upstream's `h.params.ios[2].actor.discount = 0.9f` is not replicated.** IO port 2 is a Prediction port and has no actor; the line is inert.
+
+Both routes work. Over 100k steps and 3 seeds, `--sweep goal-mode=port,top --repeat 3`:
+
+| | match | gap closed | targets built | random | scripted |
+|---|---|---|---|---|---|
+| `--goal-mode port` | 0.848 ± 0.031 | 0.530 ± 0.123 | 27.1% ± 8.6 | 0.679 | 0.996 |
+| `--goal-mode top` | 0.814 ± 0.021 | 0.428 ± 0.041 | 23.3% ± 3.5 | 0.679 | 0.996 |
+
+Learned on 3 of 3 seeds either way, and **the two are not distinguishable**: the 0.10 gap between them sits inside `port`'s own 0.12 spread. A single seed at 60k steps had `top` ahead, which is exactly the kind of reading `--repeat` exists to overturn. Both deliver the goal; nothing here says which is better, and the demo should not be quoted as if it did.
+
+#### `stacking_prog`
+
+No actor and no reward. All three IO ports are Prediction ports and the action executed is simply whatever the action port predicts. The mechanism is upstream's, in three parts:
+
+1. **Train** the hierarchy while feeding a goal CSDR at the top.
+2. **Distil** a program: clone the hierarchy, show the clone the target grid for 32 steps with learning off and null action and position, and take the top hidden CSDR that settles out. That is the target expressed in the hierarchy's own most abstract vocabulary — the form `step_with_goal` wants. (`Hierarchy` had to gain `Clone` for this; C++ gets `aon::Hierarchy copy = h;` for free.)
+3. **Execute** the live hierarchy on that program with learning off.
+
+**`--train-policy` is the load-bearing switch, and the faithful setting does not work.** Upstream trains on *random actions* under *random goal CSDRs*, and this demo reproduces that as its default. It cannot work, and the demo says so rather than hiding it: the action port is being asked to predict a uniformly random action, so it learns the marginal and nothing else, and at execution time a distilled program is out of distribution because training never showed the hierarchy a goal that meant anything. Measured over 3 seeds: action agreement 0.244 ± 0.005 — chance for four actions — and a distilled program beats an arbitrary one by 0.036 ± 0.015, which is inside its own spread.
+
+`--train-policy scripted` is the RUST-ONLY variant that makes the mechanism testable: the same scripted solver from `stacking_rl` demonstrates, under the goal it is actually building, distilled in exactly the form execution will supply. That is goal-conditioned behavioural cloning through a top-layer CSDR, and it works decisively — 0.588 ± 0.173 advantage, on 3 of 3 seeds.
+
+Two metric decisions here are worth more than the code, because the obvious choice is wrong in both cases:
+
+- **Scored on time *held* at the target, not the best match reached.** There are only ten reachable configurations of three blocks in three columns, so a random walk stumbles onto any given one within a few dozen steps. Scored on the best match it ever touched, flailing beats every policy in the demo including the trained one — random actions scored 0.859 against the trained agent's 0.819, which reads as failure and is an artefact. Scored on how much of the settled second half of a trial is spent *at* the target, random gets the ~1/10 it deserves.
+- **Action agreement excludes idle steps.** A scripted demonstrator builds the target in about twenty steps and then emits "do nothing" until it changes. On a 300-step timer that is 93% of the training data, so scoring every step measures how often the world is already built — an easy 99% for a hierarchy that has learned nothing but to freeze. The same reasoning is why the scripted training regime re-draws the target the moment it is built rather than on a timer: it keeps the demonstrator working.
+- **The control that matters is the *random program*, not random actions.** Same trained hierarchy, same worlds, same starting positions — differing only in whether the goal handed to it means anything. Beating random actions could be explained by having learned to move blocks at all; beating an arbitrary program cannot.
+
 ### `vsa_char`
 
 Each character is bound to a positional vector and the results bundled, so a whole word collapses into a single `SegVec<256, 8>`. Written out one-hot that vector **is** a CSDR — 256 columns of 8 cells — so it feeds a `Hierarchy` directly with no encoding step at all. The hierarchy learns to predict the next word's vector, and reading the answer means unbinding each position and cleaning up against the alphabet: the *decoding* is algebra, not a learned decoder.
@@ -282,7 +336,7 @@ The demo also reports **encoding fidelity** before training: how much of a word 
 
 ### `enc_vis` and `topo_test`
 
-Both upstream demos read a stored `vl.means` scalar per cell — already a normalised position. **This crate's `encoder::VisibleLayer` has no `means`.** It ports a byte-weight ART formulation whose weights are indexed by the *input cell* as well, so instead of a scalar there is a learned histogram over the input column, and the position is its weighted centroid. `examples/support/encoder_probe.rs` does that decoding.
+Both upstream demos read a stored `vl.means` scalar per cell — already a normalised position. **This crate's `encoder::VisibleLayer` has no `means`.** It ports a byte-weight ART formulation whose weights are indexed by the *input cell* as well, so instead of a scalar there is a learned histogram over the input column, and the position is its weighted centroid. `examples/support/probe.rs` does that decoding.
 
 Two things about it matter:
 
@@ -324,7 +378,7 @@ That separation is required rather than stylistic. R16 of dcc-core's import cont
 
 `--demo` takes `ball_physics`, `cat_mouse` or `car_racing` — the three where motion is the point. It trains live and draws what is happening, the way the upstream SFML demos do. Space fast-forwards; Escape quits; in `ball_physics`, `G` closes the loop so the hierarchy generates from its own predictions.
 
-The other six demos are text-only by design. A scrolling plot, an ASCII frame or a scatter says everything a window would for them, and they already print it.
+The other twelve demos are text-only by design. A scrolling plot, an ASCII frame or a scatter says everything a window would for them, and they already print it.
 
 Two things keep this honest. The viewer builds its hierarchies through the same `build_hierarchy` functions in `support/env/` that the headless demos use, so the two configurations cannot drift apart. And `support/viz.rs` is five functions — `View`, `blit_gray`, `plot_series`, `scatter`, `hud`. If it starts growing state, options or layout logic, that is the signal the work belongs in dcc-dashboard rather than here.
 
@@ -332,4 +386,4 @@ CI builds the crate in its own job and no further: opening a window is not CI's 
 
 ## What CI does
 
-`cargo build --all-targets`, `cargo test --all-targets`, `cargo clippy --all-targets -- -D warnings`, and then **runs all nine demos** at small step counts. Building is not enough — a demo that panics on step one still compiles.
+`cargo build --all-targets`, `cargo test --all-targets`, `cargo clippy --all-targets -- -D warnings`, and then **runs every demo** at small step counts. Building is not enough — a demo that panics on step one still compiles. `stacking_rl` and `stacking_prog` are each run twice, once per mode: `--goal-mode top` and `--train-policy scripted` are the only demo paths through `step_with_goal`, and a build that broke the goal path would otherwise still pass.

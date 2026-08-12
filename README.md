@@ -110,7 +110,7 @@ Start here:
 
 ### Ported from OgmaNeoDemos
 
-Thirteen demos ported from [OgmaNeoDemos](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo), Ogma's own demo repository. Each doubles as an end-to-end check that a feature of the library works on a real problem. [`doc/Demos.md`](doc/Demos.md) records what each one does and where it departs from its source.
+Fifteen demos ported from [OgmaNeoDemos](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo), Ogma's own demo repository. Each doubles as an end-to-end check that a feature of the library works on a real problem. [`doc/Demos.md`](doc/Demos.md) records what each one does and where it departs from its source.
 
 | Demo | Command | Shows |
 | --- | --- | --- |
@@ -127,6 +127,8 @@ Thirteen demos ported from [OgmaNeoDemos](https://github.com/jacobeverist/OgmaNe
 | **Runner** | `cargo run --release --example runner` | An eight-motor articulated body learning a gait. The hardest of the set. |
 | **Encoder Visualiser** | `cargo run --release --example enc_vis` | What the ART encoder's cells actually learn, as weight profiles and a scatter. |
 | **Topology Test** | `cargo run --release --example topo_test` | Whether `Encoder` preserves neighbourhood structure. (It does not — see `doc/Demos.md`.) |
+| **Stacking RL** | `cargo run --release --example stacking_rl` | Goal-conditioned RL: build the configuration you are shown. Compares two ways of delivering the goal. |
+| **Stacking Prog** | `cargo run --release --example stacking_prog` | A goal distilled into a top-layer CSDR and replayed as a "program" — the demo `step_with_goal` exists for. |
 
 Each takes `--steps`, `--seed`, `--every` and `--quiet`; `--seed` fully determines a run. The RL demos measure themselves against a random-action baseline on the same world and seed, so the numbers mean something.
 
