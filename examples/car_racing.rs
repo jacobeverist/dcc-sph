@@ -14,19 +14,18 @@
 //   cargo run --release --example car_racing
 //   cargo run --release --example car_racing -- --steps 500000
 
-use dcc_sph::helpers::Int3;
-use dcc_sph::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
 use std::path::PathBuf;
 
 #[path = "support/mod.rs"]
 mod support;
 
 use support::args::Args;
-use support::env::racing::{random_steer, Racing, Track, NUM_SENSORS, SENSOR_GRID, STEER_RES};
+use support::env::racing::{
+    build_hierarchy, random_steer, Racing, Track, NUM_SENSORS, SENSOR_GRID, SENSOR_RES, STEER_RES,
+};
 use support::report::Rolling;
 use support::rng::{seed_everything, Rng};
 
-const SENSOR_RES: i32 = 16;
 /// Frames held straight at the start, before the policy takes over. Upstream's
 /// `actionSetCounter`, which stops the car spinning on the spot from frame one.
 const WARMUP_FRAMES: usize = 10;
@@ -74,37 +73,11 @@ fn main() {
     let baseline = run_random(baseline_steps, &assets, &mut rng);
 
     // --- Hierarchy ---
+    //
+    // Defined in the environment module so the windowed viewer drives exactly the
+    // same configuration.
 
-    let io_descs = vec![
-        IoDesc {
-            size: Int3::new(SENSOR_GRID as i32, SENSOR_GRID as i32, SENSOR_RES),
-            io_type: IoType::Prediction,
-            num_dendrites_per_cell: 4,
-            up_radius: 4,
-            down_radius: 2,
-            ..Default::default()
-        },
-        IoDesc {
-            size: Int3::new(1, 1, STEER_RES),
-            io_type: IoType::Action,
-            num_dendrites_per_cell: 4,
-            up_radius: 2,
-            down_radius: 2,
-            ..Default::default()
-        },
-    ];
-
-    let layer_descs = vec![LayerDesc {
-        hidden_size: Int3::new(5, 5, 32),
-        num_dendrites_per_cell: 4,
-        up_radius: 2,
-        recurrent_radius: 0,
-        down_radius: 2,
-        ticks_per_update: 1,
-    }];
-
-    let mut h = Hierarchy::new();
-    h.init_random(&io_descs, &layer_descs);
+    let mut h = build_hierarchy();
 
     let mut env = Racing::new(track);
 

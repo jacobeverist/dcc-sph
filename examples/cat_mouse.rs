@@ -18,20 +18,17 @@
 //   cargo run --release --example cat_mouse
 //   cargo run --release --example cat_mouse -- --steps 400000 --cells 10
 
-use dcc_sph::helpers::Int3;
-use dcc_sph::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
-
 #[path = "support/mod.rs"]
 mod support;
 
 use support::args::Args;
 use support::encode::bin_unit;
-use support::env::catmouse::{CatMouseEnv, Map, ACTION_SIZE, OBS_SIZE};
+use support::env::catmouse::{
+    build_hierarchy, CatMouseEnv, Map, ACTION_RES, ACTION_SIZE, OBS_RES, OBS_SIZE,
+};
 use support::report::{sparkline, Rolling};
 use support::rng::{seed_everything, Rng};
 
-const OBS_RES: i32 = 16;
-const ACTION_RES: i32 = 5;
 /// Physics runs at 120 Hz, control and learning at 30 Hz — four physics substeps
 /// per decision, with the action held across them. Upstream's `dt` and `aiDT`.
 const SUBSTEPS: usize = 4;
@@ -73,35 +70,12 @@ fn main() {
     // will see, only act on it. Note that means `get_prediction_cis(0)` returns an
     // empty slice — upstream's commented-out "curiosity" reward reads exactly that
     // and would panic here, which is why it is not ported.
+    //
+    // The descriptors live in the environment module so the windowed viewer drives
+    // the same configuration.
 
-    let io_descs = vec![
-        IoDesc {
-            size: Int3::new(7, 5, OBS_RES),
-            io_type: IoType::None,
-            ..Default::default()
-        },
-        IoDesc {
-            size: Int3::new(1, ACTION_SIZE as i32, ACTION_RES),
-            io_type: IoType::Action,
-            ..Default::default()
-        },
-    ];
-
-    let layer_descs = vec![LayerDesc {
-        hidden_size: Int3::new(5, 5, 128),
-        num_dendrites_per_cell: 4,
-        up_radius: 2,
-        recurrent_radius: 0,
-        down_radius: 2,
-        ticks_per_update: 1,
-    }];
-
-    let mut cat_h = Hierarchy::new();
-    let mut mouse_h = Hierarchy::new();
-    cat_h.init_random(&io_descs, &layer_descs);
-    mouse_h.init_random(&io_descs, &layer_descs);
-    cat_h.params.ios[1].importance = 0.1;
-    mouse_h.params.ios[1].importance = 0.1;
+    let mut cat_h = build_hierarchy();
+    let mut mouse_h = build_hierarchy();
 
     println!("Cat and Mouse — {steps} decisions at 30 Hz, seed {seed}");
     println!("  maze {map_w}x{map_h} (generated; upstream's map0.png is missing from the repo)");

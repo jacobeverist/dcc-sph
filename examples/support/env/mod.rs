@@ -9,4 +9,5 @@ pub mod catmouse;
 pub mod cluster;
 pub mod pusher;
 pub mod racing;
+pub mod runner;
 pub mod wavy;

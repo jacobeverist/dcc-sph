@@ -63,6 +63,13 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # headless with no features enabled.
 png = "0.17"
 
+# Only the `runner` demo needs this. Every other demo's physics is hand-written in
+# tens of lines, but the runner is a genuinely articulated body — four limbs of two
+# segments, eight revolute motors with angle limits and torque caps, contact
+# sensing and world raycasts — and reimplementing a constraint solver for one demo
+# would be its own project. A dev-dependency for the same reason as `png`.
+rapier2d = "0.35"
+
 [[bench]]
 name = "sph_benchmarks"
 harness = false
@@ -113,6 +120,15 @@ name = "cat_mouse"
 
 [[example]]
 name = "car_racing"
+
+[[example]]
+name = "runner"
+
+# The whole of the graphics feature: one window onto three of the demos. The other
+# six are text-only by design.
+[[example]]
+name = "viewer"
+required-features = ["macroquad-demos"]
 
 [[example]]
 name = "cartpole_env_runner"

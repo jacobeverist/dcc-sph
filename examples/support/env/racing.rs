@@ -8,6 +8,8 @@
 // the simulation reads them. See `doc/Demos.md`.
 
 use crate::support::rng::Rng;
+use dcc_sph::helpers::Int3;
+use dcc_sph::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
 use std::path::Path;
 
 pub const NUM_SENSORS: usize = 12;
@@ -295,6 +297,48 @@ impl Racing {
 /// A steering index chosen uniformly at random — the baseline policy.
 pub fn random_steer(rng: &mut Rng) -> i32 {
     rng.below(STEER_RES as usize) as i32
+}
+
+
+/// Sensor column resolution used by both the headless demo and the viewer.
+pub const SENSOR_RES: i32 = 16;
+
+/// The hierarchy `car_racing` uses.
+///
+/// Defined here rather than in the demo so the windowed viewer drives exactly the
+/// same configuration; a second copy would drift.
+pub fn build_hierarchy() -> Hierarchy {
+    let io_descs = vec![
+        IoDesc {
+            size: Int3::new(SENSOR_GRID as i32, SENSOR_GRID as i32, SENSOR_RES),
+            io_type: IoType::Prediction,
+            num_dendrites_per_cell: 4,
+            up_radius: 4,
+            down_radius: 2,
+            ..Default::default()
+        },
+        IoDesc {
+            size: Int3::new(1, 1, STEER_RES),
+            io_type: IoType::Action,
+            num_dendrites_per_cell: 4,
+            up_radius: 2,
+            down_radius: 2,
+            ..Default::default()
+        },
+    ];
+
+    let layer_descs = vec![LayerDesc {
+        hidden_size: Int3::new(5, 5, 32),
+        num_dendrites_per_cell: 4,
+        up_radius: 2,
+        recurrent_radius: 0,
+        down_radius: 2,
+        ticks_per_update: 1,
+    }];
+
+    let mut h = Hierarchy::new();
+    h.init_random(&io_descs, &layer_descs);
+    h
 }
 
 #[cfg(test)]

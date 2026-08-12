@@ -99,14 +99,34 @@ let prediction: &[i32] = h.get_prediction_cis(0);
 
 ## Demos
 
-Runnable examples in [`examples/`](examples/):
+Runnable examples in [`examples/`](examples/). Everything below runs **headless and text-only with no features enabled**, so it works over SSH and in CI.
+
+Start here:
 
 | Demo | Command | Shows |
 | --- | --- | --- |
 | **Wave prediction** | `cargo run --release --example wave_prediction` | Wavy-line sequence prediction with ASCII recall output. The "hello world". |
 | **CartPole** | `cargo run --release --example cartpole` | Balancing via the built-in actor-critic, with built-in physics — no Python. |
-| **CartPole (Gymnasium)** | `cargo run --release --example cartpole_env_runner --features gymnasium-examples` | The same task driven through a real Gymnasium environment. Needs Python — see below. |
-| **LunarLander** | `cargo run --release --example lunarlander --features gymnasium-examples` | A harder continuous-control task. Needs Python — see below. |
+
+### Ported from OgmaNeoDemos
+
+Nine demos ported from [OgmaNeoDemos](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo), Ogma's own demo repository. Each doubles as an end-to-end check that a feature of the library works on a real problem. [`doc/Demos.md`](doc/Demos.md) records what each one does and where it departs from its source.
+
+| Demo | Command | Shows |
+| --- | --- | --- |
+| **Wavy Line** | `cargo run --release --example wavy_line` | Multi-channel prediction with N-step lookahead; verifies the `write_state`/`read_state` round trip every step. |
+| **Wavy Classify** | `cargo run --release --example wavy_classify` | Streaming five-way classification with the label withheld at inference. Reports a confusion matrix. |
+| **Ball Physics** | `cargo run --release --example ball_physics` | `ImageEncoder` + `reconstruct()`: after five seed frames it generates the bouncing ball from its own predictions. |
+| **Pusher** | `cargo run --release --example pusher` | `Actor` on a multi-column action port with a dense shaped reward. |
+| **Cat and Mouse** | `cargo run --release --example cat_mouse` | **Two hierarchies** competing in one maze, zero-sum reward. |
+| **Car Racing** | `cargo run --release --example car_racing` | Steering a real track from twelve raycast sensors. Completes laps. |
+| **Runner** | `cargo run --release --example runner` | An eight-motor articulated body learning a gait. The hardest of the set. |
+| **Encoder Visualiser** | `cargo run --release --example enc_vis` | What the ART encoder's cells actually learn, as weight profiles and a scatter. |
+| **Topology Test** | `cargo run --release --example topo_test` | Whether `Encoder` preserves neighbourhood structure. (It does not — see `doc/Demos.md`.) |
+
+Each takes `--steps`, `--seed`, `--every` and `--quiet`; `--seed` fully determines a run. The RL demos measure themselves against a random-action baseline on the same world and seed, so the numbers mean something.
+
+Adding `--features macroquad-demos` opens a window for the demos where motion is the point. It is a way to eyeball a demo, not instrumentation, and it changes nothing about the simulation or the reported numbers.
 
 ### Running the Gymnasium demos
 
@@ -165,8 +185,12 @@ src/
 tests/
   smoke_test.rs    — integration tests
   fidelity.rs      — C++ parity comparison against committed fixtures
+  demos_support.rs — runs the unit tests inside examples/support/
   fixtures/        — committed golden data
-examples/          — four demos (see Demos)
+examples/
+  support/         — shared demo scaffolding: args, encoding, reporting, environments
+  *.rs             — the demos themselves (see Demos)
+assets/            — the two track bitmaps car_racing needs
 benches/           — criterion benchmarks
 fidelity/          — harness for regenerating fixtures (needs an AOgmaNeo checkout)
 doc/               — documentation

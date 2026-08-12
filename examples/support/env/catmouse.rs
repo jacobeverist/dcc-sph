@@ -9,6 +9,8 @@
 // instead. `--seed` makes it reproducible. See `doc/Demos.md`.
 
 use crate::support::rng::Rng;
+use dcc_sph::helpers::Int3;
+use dcc_sph::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
 
 const PI: f32 = std::f32::consts::PI;
 
@@ -326,6 +328,42 @@ fn angle_wrap(delta: f32) -> f32 {
     let offset = delta + PI;
     let m = offset - (offset / (2.0 * PI)).floor() * (2.0 * PI);
     m - PI
+}
+
+
+pub const OBS_RES: i32 = 16;
+pub const ACTION_RES: i32 = 5;
+
+/// One of the two identical hierarchies `cat_mouse` uses.
+///
+/// Defined here so the windowed viewer drives exactly the same configuration.
+pub fn build_hierarchy() -> Hierarchy {
+    let io_descs = vec![
+        IoDesc {
+            size: Int3::new(7, 5, OBS_RES),
+            io_type: IoType::None,
+            ..Default::default()
+        },
+        IoDesc {
+            size: Int3::new(1, ACTION_SIZE as i32, ACTION_RES),
+            io_type: IoType::Action,
+            ..Default::default()
+        },
+    ];
+
+    let layer_descs = vec![LayerDesc {
+        hidden_size: Int3::new(5, 5, 128),
+        num_dendrites_per_cell: 4,
+        up_radius: 2,
+        recurrent_radius: 0,
+        down_radius: 2,
+        ticks_per_update: 1,
+    }];
+
+    let mut h = Hierarchy::new();
+    h.init_random(&io_descs, &layer_descs);
+    h.params.ios[1].importance = 0.1;
+    h
 }
 
 #[cfg(test)]

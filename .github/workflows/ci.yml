@@ -53,6 +53,27 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      # The demos are headless and text-only by default, so CI can actually run
+      # them. Building them is not enough: a demo that panics on step one still
+      # compiles. These are deliberately tiny — enough to exercise the setup,
+      # encoding, step loop and reporting of each without turning CI into a
+      # training run. `runner` is the slow one (rigid-body simulation), so it gets
+      # the smallest budget.
+      - name: Smoke-run the demos
+        env:
+          RAYON_NUM_THREADS: 1
+        run: |
+          set -e
+          cargo run --release --example wavy_line     -- --steps 2000 --quiet
+          cargo run --release --example wavy_classify -- --train-steps 3000 --test-steps 1000 --hold 500 --quiet
+          cargo run --release --example ball_physics  -- --train-episodes 5 --gen-episodes 1 --quiet
+          cargo run --release --example enc_vis       -- --steps 3000 --quiet
+          cargo run --release --example topo_test     -- --steps 3000 --quiet
+          cargo run --release --example pusher        -- --steps 3000 --baseline-steps 1000 --quiet
+          cargo run --release --example cat_mouse     -- --steps 2000 --baseline-steps 500 --quiet
+          cargo run --release --example car_racing    -- --steps 3000 --baseline-steps 1000 --quiet
+          cargo run --release --example runner        -- --steps 1000 --baseline-steps 500 --quiet
+
       - name: Docs
         env:
           RUSTDOCFLAGS: -D warnings
@@ -99,3 +120,19 @@ jobs:
           python-version: '3.12'
       - name: Check the pyo3-gated examples still build
         run: cargo check --examples --features gymnasium-examples
+
+  # Same reasoning as above, for the same reason it is not `--all-features`: the
+  # windowed demo shells need a display, which a CI runner does not have. Checking
+  # that the feature still compiles is worth doing; opening a window is not CI's job.
+  macroquad-feature:
+    name: macroquad-demos compiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the X11 and ALSA headers macroquad links against
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxi-dev libgl1-mesa-dev libasound2-dev
+      - name: Check the windowed demo shells still build
+        run: cargo check --examples --features macroquad-demos

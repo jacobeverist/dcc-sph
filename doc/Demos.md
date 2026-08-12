@@ -1,0 +1,157 @@
+# Demos
+
+Nine demos ported from [`jacobeverist/OgmaNeoDemos`](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo) (branch `aogmaneo`), Ogma Intelligent Systems Corp, CC BY-NC-SA 4.0 — the same licence as this crate. The attribution required by §3(a) is in [`PROVENANCE.md`](../PROVENANCE.md); this file is the engineering half, recording what each demo does and where it departs from its source.
+
+They all **run headless and text-only with no features enabled**. That is the default path and the one CI builds. The optional `macroquad-demos` feature opens a window for the demos where motion is the point; it exists so a demo can be eyeballed quickly, not as instrumentation — that is dcc-dashboard's job.
+
+## Running them
+
+```bash
+cargo run --release --example wavy_line
+cargo run --release --example wavy_line -- --steps 40000 --ahead 8
+```
+
+Every demo takes `--steps` (or `--episodes`), `--seed`, `--every` (report interval) and `--quiet`. `--seed` fully determines a run: it seeds both the library's global RNG and the demo's own environment stream (`examples/support/rng.rs`).
+
+| Demo | Upstream source | What it exercises |
+|---|---|---|
+| `wavy_line` | `demos/Wavy_Line.cpp` | Sequence prediction; `write_state`/`read_state` round trip |
+| `wavy_classify` | `demos/Wavy_Classify.cpp` | Two Prediction ports, per-port `importance`, `ticks_per_update` |
+| `ball_physics` | `demos/Ball_Physics.cpp` | `ImageEncoder` + `reconstruct()`, closed-loop generation |
+| `pusher` | `demos/Pusher.cpp` | `Actor`, multi-column action port, shaped reward |
+| `cat_mouse` | `demos/Cat_Mouse.cpp`, `demos/catmouse/CatMouseEnv.cpp` | **Two hierarchies**, zero-sum reward, `IoType::None` observation |
+| `car_racing` | `demos/Car_Racing.cpp` | `Actor` steering, raycast sensors, a real track asset |
+| `runner` | `demos/Runner_Run.cpp`, `demos/runner/Runner.cpp` | 8-motor articulated body, 24-column observation port |
+| `enc_vis` | `demos/EncVis.cpp` | Bare `Encoder`, receptive-field readout |
+| `topo_test` | `demos/Topo_Test_AON.cpp` | `Encoder` topology preservation |
+
+## Layout
+
+`examples/support/` holds everything shared: argument parsing, CSDR encoding, text reporting, the RNG wrapper, the encoder probe, and one module per environment. Cargo examples cannot depend on each other, so each demo pulls it in with `#[path = "support/mod.rs"] mod support;` — the idiom `examples/fidelity_dump.rs` already uses for `tests/support/`. A directory under `examples/` with no `main.rs` is not auto-discovered, so `support/` is not itself a target.
+
+Example targets default to `test = false`, so `#[cfg(test)]` code inside them never runs. `tests/demos_support.rs` includes the same tree, which compiles it in test configuration and runs its unit tests as part of `cargo test` — 63 of them, covering the encoding helpers, the reporting primitives, every environment's physics and the encoder probe.
+
+## Cross-cutting decisions
+
+**`ticks_per_update: 1` everywhere except `wavy_classify`.** The tick-gating mechanism is an addition of this crate that AOgmaNeo `645a54a` does not have (see [`Divergences.md`](Divergences.md)), so keeping it at 1 makes the demos behave as upstream does. `wavy_classify` is the exception and needs to be — see below.
+
+**`mimic = 0.0`.** Upstream calls `h.step(inputs, learn, reward)`; this crate's fourth parameter has no upstream counterpart.
+
+**Every RL demo runs a random-action baseline first.** Goals per 100k steps, crashes per 1000 frames and metres travelled are meaningless in isolation: the pusher's object can drift onto its goal unaided, a car that never steers still covers ground, and a flailing runner still moves. Each headline number is reported against what random play achieves on the same world and seed.
+
+**Assets.** Only `car_racing` needs one. `assets/racingCollision.png` and `assets/racingCheckpoints.png` are upstream's, 26 KB together. The background, foreground and car sprite are skipped: 590 KB that only ever gets drawn. Two further assets referenced by upstream demos — `resources/map0.png` and `resources/density_image5.png` — **are absent from the upstream repository**, so `cat_mouse` and `enc_vis` generate theirs.
+
+## Deviations, demo by demo
+
+### `wavy_line`
+
+- **Both prediction horizons are reported.** Upstream computes the true 1-step prediction and then plots `mPredIndice` — the N-step value — for *both* its "1-step" and "N-step" curves, so the 1-step prediction is never displayed.
+- **Baselines are horizon-matched.** Persistence is measured at the same horizon as the prediction it judges. These signals are smooth and heavily oversampled, so 1-step persistence sits near the encoder's quantisation floor and is nearly unbeatable; scoring an N-step prediction against it would say nothing.
+- **The encoding clamps.** Upstream's `simpleFloat2CSDR` does not, so a large enough noise spike produces an out-of-range column index there.
+- `--check-state` verifies every rollout's `write_state`/`read_state` round trip leaves the predictions bit-identical, rather than assuming it. This is the demo's main reason for existing.
+
+Typical result over 30k steps: 1-step MAE 0.0113 against 0.0359 for persistence; 5-step 0.0230 against 0.1754. The 1-step figure sits just above the encoder's mean quantisation error of 0.0099, so it is at the resolution limit of the encoding rather than of the model.
+
+### `wavy_classify`
+
+- **`ios[1].importance` defaults to 0.0, not upstream's 0.1.** `importance` weights an IO port on the *encoder input* side only; the decoder predicts that port from the hidden state regardless. At 0.1 the true label reaches the hidden state during training, and since the label is constant for `--hold` steps at a time, "predict the next label" is solved by the identity — copy the label just given. The decoder never learns to infer class from the signal, and at inference, when the label is withheld and the port is fed the model's own prediction, that identity latches onto whatever it emitted first: the confusion matrix collapses into a single column. At 0.0 the label cannot reach the hidden state at all and the decoder has to do real classification.
+- **The layer stack uses `ticks_per_update` 1, 2, 4, 8.** Telling these classes apart means measuring frequency — class 1 has a period of ~22 steps, class 0 of 80, and classes 3 and 4 differ only by a 40-step component — which needs tens of samples of context. A flat stack has only self-recurrence and sits at chance however long it trains. Upstream's `//lds[i].ticks_per_update = 2;` is commented out: the mechanism did not exist in that AOgmaNeo revision. Four layers beats five.
+- **Accuracy is measured.** Upstream never measures it at all — there is no counter anywhere in the file, and it is judged by eye from two overlaid curves. This reports a confusion matrix with per-class recall, both overall and excluding a settling window after each class switch.
+- **The `USE_SENSOR_DATA` path is not ported.** It needs `resources/training_camdataDetrend.txt`, 32,173 rows and 2.5 MB.
+- The demo also prints an *online* training accuracy, explicitly labelled optimistic: the decoder is updated toward the current target immediately before the activation that reads it, so it runs near 100% even when nothing generalisable has been learned. It is there to separate a shortcut from an inseparable task, which is how both problems above were found.
+
+Typical result: 66% settled accuracy against 20% chance.
+
+### `ball_physics`
+
+- **The physics is hand-written; Box2D is not a dependency.** One circle under gravity in an axis-aligned box needs no solver. The geometry constants are upstream's Box2D body definitions translated into the surfaces they produce: ground top at `y = 0`, wall inner faces at `x = ±7.5`, ball radius 1.4, restitution 0.82.
+- **The scene is rasterised in software** into the 64×64 buffer the `ImageEncoder` reads. One subtlety worth recording: upstream draws through a default-constructed `sf::View`, whose size is SFML's default 1000×1000 view-pixels, so the visible region is 15.6 m across — not the 1 m it looks like from the 64 px target at 64 px/m.
+- **Position error is the headline metric, not frame MSE.** MSE prefers a *blank* frame to a slightly misplaced ball, because a misplaced ball is wrong twice over — once where it is drawn and once where it should have been. An undertrained model that collapsed to empty space scored 0.026 against 0.043 for a trained one that keeps a ball alive. The demo recovers the ball's position from each frame by subtracting the static background, and reports tracking error bucketed by how long the loop has run unaided.
+
+Typical result: the ball persists in 100% of generated frames at 3.4 m mean error against 5.3 m for a frozen frame, in a 15.6 m view. It learns the dynamics but decorrelates from the true trajectory, which the per-horizon breakdown shows directly.
+
+### `pusher`
+
+- **An episode timeout was added, and the demo does not work without one.** Upstream has no episode limit. The object only ever moves while the pusher overlaps it, so a policy that stops moving freezes the world: no reward, no termination, nothing to learn from, for ever. Standing still is a perfect local optimum worth exactly 0, and the actor finds it within about 50k steps and never leaves — goals and losses both drop to zero and stay there. `--timeout 0` reproduces upstream.
+- **Exploration defaults to 0.05.** Upstream wires up an exploration hook and leaves it at 0, relying on the actor's own stochastic policy; that is not enough to escape the local optimum above.
+
+Typical result: 16 goals per 100k steps against 2 for random, losing the object less often than random does.
+
+### `cat_mouse`
+
+- **The maze is generated.** `resources/map0.png` is absent from the upstream repository. It is a randomised depth-first maze, then *braided* — extra walls reopened to create loops. A perfect maze gives the mouse nowhere to dodge and the cat a guaranteed corner, so neither agent has anything to learn; upstream's hand-drawn map has open rooms for the same reason.
+- **The default maze is 5×5 cells.** Bigger looks better but makes capture so rare that nothing is measurable: at 8×8 a random cat catches the mouse in about 9% of episodes, and a 40k-step run produces two captures total.
+- **An episode timeout was added.** Without one, a mouse that simply outruns the cat produces an episode that never ends and mean time-to-capture is unmeasurable.
+- **The curiosity reward is not ported.** It compares observations against `get_prediction_cis(0)`, and this crate returns an **empty slice** for an `IoType::None` port, so it would panic. It is commented out of the reward upstream anyway.
+
+Typical result over 250k decisions: capture rate 32.8% against 21.1% for random play, with mean steps-to-capture falling monotonically — the cat out-learning the mouse.
+
+### `car_racing`
+
+- **Only the collision mask and checkpoint ring are vendored**, as above. The `png` dev-dependency decodes them.
+- Otherwise a close port: 12 rays at `0.16·(s − 6) + rotation` cast in 2-pixel increments, the same drag-and-accelerate car model, and upstream's reward — speed projected onto the direction of the track, so going fast the wrong way scores negative.
+
+Typical result over 100k frames: 13 laps, crashes down from 28 to 1.7 per 1000 frames, 4× the distance of random steering. The strongest result of the RL demos.
+
+### `runner`
+
+- **`rapier2d` stands in for Box2D**, as a dev-dependency. This is the only demo whose physics is not hand-written: four limbs of two segments, eight revolute motors with angle limits and torque caps, contact sensing and world raycasts need a constraint solver.
+- **Joint limits are offset by each joint's assembly angle.** Box2D lets a revolute joint carry a reference frame — upstream sets `frameA.q = relativeAngle` — so limits and the reported angle are measured from the pose the limb was assembled in. rapier's 2D `RevoluteJointBuilder` has no such frame: limits apply to the raw relative rotation. Since the segments are assembled at −0.75π and +0.5π, applying `[-1.1, 1.1]` directly constructs every joint already outside its own limit; the solver then locks the whole body rigid and the runner cannot move at all, under any policy, at any torque. It fails silently — nothing errors, the demo just reports zero distance, and even the random baseline reaches 0.00 m. There is a regression test for it.
+- **`MotorModel::ForceBased`.** Box2D's `maxMotorTorque` is a torque; `AccelerationBased` would scale the cap by each segment's inertia and let the motors overpower their own angle limits.
+- **The four foot-contact flags go to fixed slots.** Upstream's `runner/Runner.cpp` writes `state[si++] = 1.0f` *inside* the "is this foot touching" conditional, so the write index only advances when a contact is found — the whisker and IMU readings shift position in the vector by however many feet happen to be on the ground, and the tail is left at zero. Reproducing that is possible but makes the sensor layout contact-count dependent for no benefit, and it changes the learning problem either way.
+- Upstream's co-located limbs are preserved: both the "back" and "front" limbs attach at the *same* hip point on each side, so this is two legs per hip rather than fore and aft legs.
+- The IMU reports per-frame velocity *differences*, not accelerations — upstream never divides by dt, and the sensor scaling depends on it.
+
+This is by far the hardest problem in the suite: a gait has to be discovered from a sparse velocity signal across eight coupled motors. Expect it to need far more steps than the other demos — and it is the slowest to run, being the only one simulating rigid bodies.
+
+Typical result over 200k control steps, with the furthest point reached in each window: 3.8 m → 6.3 m → 14.8 m → 20.2 m, mean velocity −0.11 → +0.70 m/s, resets falling from 6.1 to 1.7 per 1000 steps. Against a random baseline of 0.99 m. Almost all resets are hurdle collisions rather than stalls, which is the signature of a body that is actually travelling.
+
+### `enc_vis` and `topo_test`
+
+Both upstream demos read a stored `vl.means` scalar per cell — already a normalised position. **This crate's `encoder::VisibleLayer` has no `means`.** It ports a byte-weight ART formulation whose weights are indexed by the *input cell* as well, so instead of a scalar there is a learned histogram over the input column, and the position is its weighted centroid. `examples/support/encoder_probe.rs` does that decoding.
+
+Two things about it matter:
+
+- **The centroid is taken over supra-threshold weights only.** A 64-cell input column carries ~224 units of uniform initialisation noise spread evenly across it against a single 255-unit spike, so a raw centroid is dragged almost halfway to the middle of the range — it reports roughly 0.36 for a cell trained solely at 0.25. Weights start in `0..8` and learning drives winners to 255, so thresholding at 128 is unambiguous.
+- **The probe also reports `compactness`**, the fraction of a cell's index span that is actually learned. ART never requires a committed set to be contiguous, and upstream's stored mean cannot represent a split set at all.
+
+`enc_vis` additionally generates its density field procedurally, since `resources/density_image5.png` is missing upstream, and exposes `--vigilance`. `topo_test` samples all clusters uniformly, where upstream feeds only the cluster selected with the number keys, and skips the `class Enc` at the top of the upstream file — a hand-written reference learner that is never instantiated in `main`.
+
+**Both report negative results, and both are correct to.** `Encoder` cells commit to scattered input sets rather than contiguous bands (compactness ~0.22); raising vigilance to 0.99 makes them far more selective — about 2 input levels instead of 17 — without making them contiguous. And adjacent cells within a column are no closer in input space than randomly paired ones (0.3495 against 0.3436).
+
+More training cannot change this. `Encoder` has **no topology-forming mechanism**: its only neighbourhood parameter, `Params::l_radius`, drives lateral inhibition — it decides whether a column may learn by counting how many neighbours scored higher — and never updates a neighbour's weights. Learning touches the winning cell and nothing else, so a cell's index within a column carries no spatial meaning. `ImageEncoder` is the SOM here: it carries `Params::falloff` and `Params::n_radius`, and updates cells at distance `d` from the winner at `rate * falloff^d`. That is worth knowing before reaching for `Encoder` expecting a map. The upstream demos probe an AOgmaNeo revision whose encoder stored `vl.means`, a different formulation; the difference is algorithmic, not a port defect.
+
+`enc_vis` prints the raw weight profiles alongside its summary so the claim can be checked rather than taken on trust.
+
+## Not ported
+
+| Upstream | Why |
+|---|---|
+| `Video_Prediction`, `Loop_Mapper`, `Loop_Counter`, `Single_Lap_Mapper`, `VSA_Tests_Video`, `TrackSOM`, `Car_Tracker`, `Donkey_Playback`, `FP_Playback`, `SDC_Controller_Test` | Need OpenCV video decoding |
+| `Fluid` | Only loads pretrained `.oenc`/`.ohr` weights, which are not in the repository |
+| `Image_Encoder_Test` | Uses a DCT-based `Image_Encoder` (`get_dct_bases()`, `encode()`) that `src/image_encoder.rs` does not implement |
+| `Ball_Physics_Vec`, `VSA_Char` | Use `Int2` hidden sizes and a 4-argument `IO_Desc` from a *newer* AOgmaNeo than the `Int3` API this crate ports from `645a54a` |
+| `Cat_Mouse_Pos`, `Explore`, `Stacking_RL`, `Stacking_Prog`, `C_Test`, `VSA_Char_Single`, `VSA_Tests_Comp`, `Wavy_Classify_Old` | Variants of demos already covered, or superseded |
+| ~40 others (`ARTTest`, `ART_Visualizer`, `Basic`, `Evo`, `STDP`, `SOMGridCells`, `Topo_Test`, `VSA_Tests*`, `Generative`, `Marcher`, `TEM`, `Swarm_*`, `Stacking`, `Car_Racing_RL`, `Reacher`, `NaviGraph`, …) | Include no `aogmaneo/` headers at all — standalone research sketches sharing the repository |
+
+Of the 69 top-level demos upstream, 27 link AOgmaNeo.
+
+## Graphics
+
+The whole of the `macroquad-demos` feature is one extra target, `examples/viewer.rs`:
+
+```bash
+cargo run --release --example viewer --features macroquad-demos -- --demo car_racing
+```
+
+`--demo` takes `ball_physics`, `cat_mouse` or `car_racing` — the three where motion is the point. It trains live and draws what is happening, the way the upstream SFML demos do. Space fast-forwards; Escape quits; in `ball_physics`, `G` closes the loop so the hierarchy generates from its own predictions.
+
+The other six demos are text-only by design. A scrolling plot, an ASCII frame or a scatter says everything a window would for them, and they already print it.
+
+Two things keep this honest. The viewer builds its hierarchies through the same `build_hierarchy` functions in `support/env/` that the headless demos use, so the two configurations cannot drift apart. And `support/viz.rs` is five functions — `View`, `blit_gray`, `plot_series`, `scatter`, `hud`. If it starts growing state, options or layout logic, that is the signal the work belongs in dcc-dashboard rather than here.
+
+The feature is optional and kept out of `--all-features` in CI, for the same reason as `gymnasium-examples`: a CI runner has no display. CI checks it still compiles; opening a window is not CI's job.
+
+## What CI does
+
+`cargo build --all-targets`, `cargo test --all-targets`, `cargo clippy --all-targets -- -D warnings`, and then **runs all nine demos** at small step counts. Building is not enough — a demo that panics on step one still compiles.

@@ -14,6 +14,18 @@
 
 For any use outside this grant, Ogma asks that you contact them: **licenses@ogmacorp.com**.
 
+## Attribution for the demos (CC BY-NC-SA 4.0 §3(a))
+
+The demos in [`examples/`](examples/) are ported from Ogma's demo repository, and two of its image assets are redistributed verbatim. Both are Adapted Material and Licensed Material respectively, so the same notices apply.
+
+- **Creator:** Ogma Intelligent Systems Corp — <https://ogma.ai>
+- **Copyright notice:** `OgmaNeoDemos - Copyright (c) Ogma Intelligent Systems Corp`
+- **License:** **CC BY-NC-SA 4.0**, the same as this crate.
+- **URI to the licensed material:** <https://github.com/ogmacorp/OgmaNeoDemos>, via the fork and branch actually ported from: <https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo>
+- **Modified?** **Yes.** Nine C++/SFML demos were rewritten in Rust against this crate's API and made headless. Each demo's deviations from its source are recorded in [`doc/Demos.md`](doc/Demos.md).
+- **Redistributed unmodified:** `assets/racingCollision.png` and `assets/racingCheckpoints.png`, copied from `resources/` in that repository and used by the `car_racing` demo.
+- **Adapter's license (§3(b) ShareAlike):** `CC-BY-NC-SA-4.0`.
+
 ## What NonCommercial means for you
 
 CC BY-NC-SA 4.0 permits use **for NonCommercial purposes only** — §1(k) defines that as "not primarily intended for or directed towards commercial advantage or monetary compensation".
