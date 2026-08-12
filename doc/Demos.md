@@ -396,4 +396,14 @@ That line is deliberate, not an omission. Whether a configuration learns is an e
 
 So the CI step counts are far too small to learn at, and that is the point rather than a compromise. `stacking_prog` reports a **negative** verdict at CI budgets and exits 0, as it should.
 
-The one place a learning outcome *is* asserted is `tests/goal_conditioned.rs`, and it is a different claim: that the goal is wired to the decoder at all. Without it the whole goal path could be a no-op and every other test in that file would still pass. It is deterministic at a fixed seed, it takes 4000 steps of a two-state toy problem, and it is a correctness test rather than a quality bar. `tests/smoke_test.rs::test_prediction_improves_on_repeating_sequence` is the same kind of thing and predates the demos.
+Learning-outcome assertions live in **`tests/learning.rs`**, which `cargo test` does not run:
+
+```bash
+cargo test --release --test learning -- --nocapture
+```
+
+`test = false` in `Cargo.toml` removes that target from `cargo test`, `cargo test --all-targets` and `cargo test --release`; naming it with `--test learning` is the only way to run it. That is stronger than `#[ignore]`, which is one deleted attribute away from being a CI gate again. CI does compile and lint it — a test nothing builds rots silently — and never runs it.
+
+Three tests live there: the two that prove the goal path is not a no-op, and `prediction_improves_on_a_repeating_sequence`, which moved out of `tests/smoke_test.rs` because it is the same kind of claim and predated the rule rather than being exempt from it.
+
+**`default_path_is_bit_identical` stayed in CI, and that is not an inconsistency.** It trains for 60 steps and hashes the result, but it asserts *sameness* — against constants measured before the goal path landed — and fails only if behaviour changed. "Did this stay identical" is deterministic and exactly what CI is for. "Did this get good enough" is a judgement about a configuration, and that is the one that moved.

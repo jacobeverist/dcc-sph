@@ -76,6 +76,23 @@ rapier2d = "0.35"
 name = "sph_benchmarks"
 harness = false
 
+# Learning-outcome assertions, deliberately NOT run by `cargo test`.
+#
+# `test = false` removes this target from `cargo test`, `cargo test --all-targets`
+# and `cargo test --release`; `cargo test --test learning` still selects it by
+# name. That is stronger than `#[ignore]`, which is one deleted attribute away
+# from being a CI gate again.
+#
+# Whether a configuration learns is an experiment, and experiments are the point of
+# this repository — they belong in an offline `--repeat`/`--sweep` run at step
+# counts a CI runner has no business spending. A learning threshold in CI turns
+# every experiment into a build break, and pressures the measurements to flatter.
+#
+# CI still compiles it (`cargo test --no-run --test learning`) so it cannot rot.
+[[test]]
+name = "learning"
+test = false
+
 [features]
 # Needs a Python environment with `gymnasium[box2d]` as well as the crate feature,
 # so it is not part of `--all-features` in CI.

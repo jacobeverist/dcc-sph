@@ -17,8 +17,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Build
 cargo build --release
 
-# Run all tests (10 integration tests + 5 doc tests)
+# Run all tests
 cargo test
+
+# Learning-outcome assertions, deliberately excluded from `cargo test` and from CI
+# (`test = false` in Cargo.toml). Whether a configuration learns is an offline
+# experiment, not a build gate. CI compiles and lints this target but never runs it.
+cargo test --release --test learning -- --nocapture
 
 # Run a single test
 cargo test test_hierarchy_create_and_step

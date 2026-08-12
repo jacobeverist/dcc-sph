@@ -57,6 +57,20 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      # `tests/learning.rs` carries the learning-outcome assertions and is marked
+      # `test = false`, so every step above skips it — including `--all-targets`,
+      # which honours that flag for both `cargo test` and `cargo clippy`. That is
+      # the intent: whether a configuration learns is an offline experiment, not a
+      # build gate.
+      #
+      # Skipped by everything also means unbuilt by everything, and an unbuilt test
+      # rots silently. Compile and lint it here, and never run it. Naming the
+      # target explicitly is what reaches past `test = false`.
+      - name: The offline learning tests still compile
+        run: |
+          cargo test --no-run --test learning
+          cargo clippy --test learning -- -D warnings
+
       # The demos are headless and text-only by default, so CI can actually run
       # them. Building them is not enough: a demo that panics on step one still
       # compiles.

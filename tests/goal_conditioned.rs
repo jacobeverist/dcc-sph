@@ -10,9 +10,16 @@
 //!   constants were measured against the tree immediately before the feature
 //!   landed, so they are a real before/after comparison rather than a snapshot of
 //!   whatever the code happens to do now.
-//! - Everything below it guards what the feature must actually do — above all
-//!   `the_goal_reaches_the_decoder`, without which every other test here would
-//!   still pass against an implementation that accepted a goal and ignored it.
+//! - Everything below it guards what the feature must actually do — that the
+//!   arity changes, that misuse panics, that the flag survives a round trip.
+//!
+//! The one claim this file does NOT make is that the goal is *useful* — that a
+//! hierarchy given a goal actually learns to use it. That is a learning outcome,
+//! and learning outcomes are not a CI gate in this repository, so it lives in
+//! `tests/learning.rs`, which `cargo test` does not run. Read that file before
+//! trusting anything here: without `the_goal_reaches_the_decoder` over there,
+//! every test in this file would still pass against an implementation that
+//! accepted a goal and quietly discarded it.
 
 use dcc_sph::helpers::{
     rand_get_state, set_global_state, Int3, SliceReader, StreamWriter, VecWriter,
@@ -119,86 +126,6 @@ fn goal_hierarchy() -> Hierarchy {
     let mut h = Hierarchy::new();
     h.init_random(&io_descs, &layer_descs);
     h
-}
-
-/// **The load-bearing test.** Everything else here would still pass against an
-/// implementation that accepted a goal and quietly discarded it.
-///
-/// The task is built so the goal is the *only* route to the answer. At each step
-/// the demo picks a bit, passes the goal that encodes it, and makes the *next*
-/// observation carry that bit. The observation fed to the encoder therefore encodes
-/// the *previous* bit and says nothing about the current one; only the goal does.
-/// A hierarchy ignoring the goal is left guessing, and 50% is the ceiling.
-///
-/// Note the one-step offset is not incidental: the decoder learns from the goal
-/// that was current when it made the prediction being corrected, which is the same
-/// pairing every lower layer uses for feedback from the layer above.
-#[test]
-fn the_goal_reaches_the_decoder() {
-    let mut h = goal_hierarchy();
-    let (lo, hi) = goal_pair(&h);
-
-    let mut state = rand_get_state(99);
-    let mut input = vec![0i32; 1];
-    let mut correct = 0usize;
-    let mut scored = 0usize;
-
-    const STEPS: usize = 4000;
-    const SCORE_FROM: usize = 3000;
-
-    for t in 0..STEPS {
-        let bit = (dcc_sph::helpers::rand_step(&mut state) % 2) as i32;
-        let goal = if bit == 1 { &hi } else { &lo };
-
-        h.step_with_goal(&[&input], goal, true, 0.0, 0.0);
-
-        // The activate pass just ran against *this* goal, so the prediction on the
-        // table is the one for the observation this goal is about to produce.
-        if t >= SCORE_FROM {
-            scored += 1;
-            if h.get_prediction_cis(0)[0] == bit {
-                correct += 1;
-            }
-        }
-
-        input[0] = bit;
-    }
-
-    let accuracy = correct as f64 / scored as f64;
-    assert!(
-        accuracy > 0.9,
-        "goal-conditioned prediction accuracy {accuracy:.3} over the last {scored} \
-         steps; the observation carries only the previous bit, so anything near 0.5 \
-         means the goal never reached the decoder"
-    );
-}
-
-/// The goal must change the *current* prediction, not merely correlate with it over
-/// training. Same trained hierarchy, same history, two different goals.
-#[test]
-fn switching_the_goal_switches_the_prediction() {
-    let mut h = goal_hierarchy();
-    let (lo, hi) = goal_pair(&h);
-
-    let mut state = rand_get_state(99);
-    let mut input = vec![0i32; 1];
-
-    for _ in 0..4000 {
-        let bit = (dcc_sph::helpers::rand_step(&mut state) % 2) as i32;
-        let goal = if bit == 1 { &hi } else { &lo };
-        h.step_with_goal(&[&input], goal, true, 0.0, 0.0);
-        input[0] = bit;
-    }
-
-    // Fork the trained hierarchy and drive the two copies apart with the goal
-    // alone — identical weights, identical history, identical observation.
-    let mut with_lo = h.clone();
-    let mut with_hi = h.clone();
-    with_lo.step_with_goal(&[&input], &lo, false, 0.0, 0.0);
-    with_hi.step_with_goal(&[&input], &hi, false, 0.0, 0.0);
-
-    assert_eq!(with_lo.get_prediction_cis(0)[0], 0);
-    assert_eq!(with_hi.get_prediction_cis(0)[0], 1);
 }
 
 #[test]
