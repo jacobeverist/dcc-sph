@@ -6,7 +6,7 @@ dcc-core imports this crate as a rev-pinned git dependency and wraps it as a `No
 
 **What is mechanically checked lives in [`../tests/conformance.rs`](../tests/conformance.rs)** and runs on every `cargo test`. The rest is recorded here with rationale.
 
-**This crate is the one that fails a requirement.** R9 is not satisfied and cannot be satisfied without restructuring; what follows is an honest account rather than a clean bill.
+**This crate still fails R9.** That is the one genuine outstanding failure; what follows is an honest account rather than a clean bill.
 
 ## Status
 
@@ -19,15 +19,15 @@ dcc-core imports this crate as a rev-pinned git dependency and wraps it as a `No
 | R5 | State expressible as grouped CSDR or sparse index list | ✅ | CSDRs; plus one documented exception, see note |
 | R6 | Config types are serde `Serialize + Deserialize + Clone` | n/a | configs are engine-owned; see note |
 | R7 | Learned state serializes to bytes | ✅ | `VecWriter` / `SliceReader` |
-| R8 | Forward pass separable from update | ⚠️ | mixed; see note |
+| R8 | Forward/update separation declared | ✅ | mixed, per type; see note |
 | R9 | RNG per-object and seed-parameterised, no globals | ❌ | **fails**; mitigation pinned by `r9_global_rng_mitigation_api_is_intact` |
 | R10 | Behavior-critical majors match dcc-core | ✅ | no shared runtime deps; see note |
-| R11 | No `pyo3` | ⚠️ | `r11_pyo3_stays_optional_and_off_by_default` |
+| R11 | No `pyo3` | ✅ | `r11_pyo3_is_absent_from_the_library` |
 | R12 | `getrandom` absent; wasm32 clean | ✅ | `r12_getrandom_is_absent_from_the_graph`, plus a CI wasm32 build |
 | R13 | `json-schema` feature for owned config types | n/a | no owned config types |
 | R14 | Builds in isolation under a single feature | ✅ | dcc-core's CI |
 | R15 | Node type tag is prefix-identifiable | ✅ | `SPH*`, wrapper-side |
-| R16 | Local apps kept out of a consumer's graph | ⚠️ | see note |
+| R16 | Local apps kept out of a consumer's graph | ✅ | `examples-gym/`; see note |
 
 ## R9 — the failure
 
@@ -54,12 +54,24 @@ It is also why dcc-core declares this crate in `[workspace.dependencies]` rather
 
 **R6 / R13 — configs are engine-owned.** Unlike the sibling ports, this crate's parameter types are not embedded in dcc-core's adapter configs; dcc-core defines its own config structs and converts at the boundary. So nothing here needs serde derives for config purposes, and there is no `json-schema` feature to expose. Both routes are sanctioned; this is the deliberate one.
 
-**R8 — forward/update separation: mixed, and this crate has both cases.** `Encoder` and `Decoder` separate a re-runnable deterministic forward pass from the update, so their wrappers use the ordinary `compute()`/`learn()` split — at the cost of a second forward pass per learning tick. `Hierarchy` and `Actor` do forward+learn+tick in one `step` call, so theirs must use the monolithic-step recipe: no-op `compute()`, and override **both** `execute` and `execute_in_thread`. `Decoder` is the awkward one: its `learn()` has to re-activate on the *previous* step's features to restore the dendrite activations the weight update needs, so the wrapper caches the prediction explicitly.
+**R8 — mixed, and this crate has both cases.** R8 asks a crate to *declare* which of two shapes it has, not to have a particular one: "either a re-runnable deterministic forward pass, or accept the monolithic-step recipe." Both are compliant; the answer is what tells a wrapper author which recipe to use.
+
+`Encoder` and `Decoder` separate a re-runnable deterministic forward pass from the update, so their wrappers use the ordinary `compute()`/`learn()` split — at the cost of a second forward pass per learning tick. `Hierarchy` and `Actor` do forward+learn+tick in one `step` call, so theirs must use the monolithic-step recipe: no-op `compute()`, and override **both** `execute` and `execute_in_thread`. `Decoder` is the awkward one: its `learn()` has to re-activate on the *previous* step's features to restore the dendrite activations the weight update needs, so the wrapper caches the prediction explicitly.
+
+*(This row read ⚠️ until 2026-08-12. That was a mis-marking, not a finding: it recorded a property as a partial failure. Nothing in this crate changed.)*
 
 **R10 — no shared runtime dependencies to skew.** This crate's only runtime dependency is `rayon`. It has no `rand`, `serde`, `schemars` or `thiserror` in `[dependencies]` — serde is dev-only, for the fidelity fixtures — so there is nothing to keep in step with dcc-core's majors. That is why this crate has no `r10_*` test while its siblings do.
 
-**R11 — `pyo3`, off by default.** The two Gymnasium example runners need it, behind the `gymnasium-examples` feature. `pyo3-ffi` sets `links = "python"` and cargo permits exactly one such package per graph, so two majors are *unresolvable*, not merely duplicated — and dcc-core's Python binding links this crate. It is survivable only because the version happens to match, which is luck rather than design. Under R16 these examples belong in a separate crate; that move has not been made.
+**R11 — `pyo3` is gone from the library, as of 2026-08-12.** It was an optional dependency here for the two Gymnasium runners. `pyo3-ffi` sets `links = "python"` and cargo permits exactly one such package per dependency graph, so two majors are *unresolvable*, not merely duplicated — and dcc-core's Python binding links this crate. Optionality did not really help: it only takes one consumer enabling the feature, and dcc-core builds with every port on. It worked because the versions happened to match, which is luck rather than design.
+
+The runners now live in `examples-gym/` (see R16), so `pyo3` is absent from the library entirely and `r11_pyo3_is_absent_from_the_library` asserts that. **This removed the last cross-repo version constraint in the whole import**: nothing now forces this repository and dcc-core to move pyo3 majors together.
 
 **R12 — satisfied, and not by accident.** This crate has no `rand` dependency: its randomness is a PCG32 in `helpers`, which is precisely what makes bit-exact integer parity with the AOgmaNeo C++ achievable. So `getrandom` never enters the graph and `cargo check --target wasm32-unknown-unknown` passes standalone. Note `rayon` compiles for wasm32 but has no threads there, degrading to serial — fine for correctness, and CI pins `RAYON_NUM_THREADS=1` anyway so a fidelity failure means "the algorithm changed" rather than "the scheduler differed".
 
-**R16 — the examples are the open question.** `examples/` holds four runners, two of them behind the pyo3 feature. Examples themselves are free — a consumer never resolves an external package's dev-dependencies — but `pyo3` is a real `[dependencies]` entry, optional, and R16 is explicit that anything with a `links` crate belongs in a **separate crate** rather than an optional feature. Moving `cartpole_env_runner` and `lunarlander` into one would remove the last cross-repo version constraint in the whole import. Not done.
+**R16 — the Gymnasium runners are a separate crate.** `examples-gym/` is a workspace member holding `cartpole_env_runner` and `lunarlander`, with `pyo3` as *its* dependency. It is `publish = false` and nothing depends on it, so it never enters a consumer's graph — dcc-core depends on the `dcc_sph` package by name, and sibling members are not part of that resolution.
+
+This is R16's middle tier, chosen over the third (an optional feature) exactly as the requirement directs: anything with a `links` crate, a C/FFI binding or a foreign toolchain must be a separate crate, because an optional feature's constraints bind the moment any consumer enables it.
+
+The three pure-Rust examples stay in `examples/` — R16's first tier, which is free: a consumer never resolves an external package's dev-dependencies. Verified from dcc-core with `cargo tree -p dcc_sph --edges dev`, which prints nothing.
+
+Note the whole repository tree is still *fetched* by a git dependency — cargo ignores `include`/`exclude` there — so `examples-gym/` is downloaded on a cold cache even though it is never built. That is a download cost, not a build or licensing one.

@@ -171,10 +171,17 @@ name = "dcc_sph"
 version = "0.1.0"
 dependencies = [
  "criterion",
- "pyo3",
  "rayon",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "dcc_sph_gym_examples"
+version = "0.1.0"
+dependencies = [
+ "dcc_sph",
+ "pyo3",
 ]
 
 [[package]]
