@@ -19,7 +19,7 @@
 
 use macroquad::prelude::*;
 
-#[path = "support/mod.rs"]
+#[path = "../../examples/support/mod.rs"]
 mod support;
 
 use support::args::Args;

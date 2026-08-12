@@ -189,6 +189,49 @@ fn r11_pyo3_stays_optional_and_off_by_default() {
     }
 }
 
+/// R10 / R16 — the runtime dependency surface stays as small as `doc/Conformance.md`
+/// claims it is.
+///
+/// That document's R10 note argues this crate has *nothing* to keep in step with
+/// dcc-core's majors, on the grounds that `rayon` is its only runtime dependency.
+/// That is a real load-bearing claim — it is why this crate has no `r10_*` version
+/// test while its siblings do — and until now it was prose that nothing enforced.
+///
+/// R16 is the other half. Local applications belong in a **separate crate**, not
+/// behind an optional feature, and an optional dependency is still a real
+/// `[dependencies]` entry: it lands in the lockfile, constrains resolution for every
+/// consumer, and sits one `default = [...]` edit away from being unavoidable. The
+/// windowed demo viewer is therefore `examples-viz/`, a workspace member, so
+/// `macroquad` never appears here — and the Gymnasium runners are headed the same
+/// way, which is the only reason `pyo3` is still on the allowlist below.
+///
+/// Adding to that list should require justifying it against both requirements.
+#[test]
+fn r10_runtime_dependencies_stay_minimal() {
+    // `pyo3` is grandfathered pending the `examples-gym` move that R16 calls for;
+    // `r11_pyo3_stays_optional_and_off_by_default` constrains it meanwhile.
+    const ALLOWED: &[&str] = &["rayon", "pyo3"];
+
+    for line in dependencies_section().lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let name = trimmed.split(['=', ' ']).next().unwrap_or("").trim();
+        if name.is_empty() {
+            continue;
+        }
+        assert!(
+            ALLOWED.contains(&name),
+            "R10/R16: `{name}` is a new runtime dependency of the library. Every entry \
+             here reaches consumers and constrains their resolution, optional or not. \
+             If it exists to serve an example or a local application, put that in a \
+             separate crate under [workspace] members — as examples-viz/ does for the \
+             windowed viewer — rather than behind a feature. See doc/Conformance.md."
+        );
+    }
+}
+
 /// R12 — `getrandom` must not be in the dependency graph at all.
 ///
 /// This crate has no `rand` dependency: its randomness is a PCG32 in `helpers`, which

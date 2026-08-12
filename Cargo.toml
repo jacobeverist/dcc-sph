@@ -31,12 +31,12 @@ rayon = "1"
 # in that workspace, and with the feature off pyo3 never enters a consumer's graph.
 pyo3 = { version = "0.29", optional = true, features = ["auto-initialize"] }
 
-# Optional, and only for the windowed shells of the demo examples. The demos all
-# run headless and text-only without it; this exists so a demo can be eyeballed
-# quickly, not as instrumentation — that is dcc-dashboard's job. Optional for the
-# same reason pyo3 is: a normal build, and every consumer of this crate, pulls no
-# windowing or GL at all.
-macroquad = { version = "0.4", optional = true }
+# NOTE: there is deliberately no graphics dependency here. The windowed demo viewer
+# lives in `examples-viz/`, a separate crate, so `macroquad` never enters this
+# package's `[dependencies]` at all — see R16 in doc/Conformance.md and the
+# rationale in examples-viz/Cargo.toml. `rayon` is this crate's only runtime
+# dependency, and doc/Conformance.md's R10 note depends on it staying that way;
+# `r10_runtime_dependencies_stay_minimal` pins it.
 
 # Lint policy, in the manifest rather than in lib.rs so it reaches examples, tests
 # and benches too — the lints below fire mostly in exactly those targets.
@@ -46,9 +46,11 @@ macroquad = { version = "0.4", optional = true }
 # `doc/MethodFidelity.md` can be audited method by method. `t % 20 == 0` reads the
 # same in both languages; `t.is_multiple_of(20)` reads better as Rust and worse as a
 # comparison against the source it is supposed to mirror.
-[lints.clippy]
-manual_is_multiple_of = "allow"
-needless_range_loop = "allow"
+# Defined once at workspace level and inherited by both packages, because
+# `examples/support/` is compiled by both and a lint policy does not cross a crate
+# boundary on its own.
+[lints]
+workspace = true
 
 [dev-dependencies]
 # Fidelity harness: JSON golden fixtures (serde) for the C++ parity test.
@@ -78,11 +80,6 @@ harness = false
 # Needs a Python environment with `gymnasium[box2d]` as well as the crate feature,
 # so it is not part of `--all-features` in CI.
 gymnasium-examples = ["dep:pyo3"]
-
-# Opens a window for the demo examples. Kept out of `--all-features` in CI for the
-# same reason as above: a headless runner has no display to open one on. The
-# demos' default path needs no feature at all.
-macroquad-demos = ["dep:macroquad"]
 
 [[example]]
 name = "fidelity_dump"
@@ -136,12 +133,6 @@ name = "car_racing"
 [[example]]
 name = "runner"
 
-# The whole of the graphics feature: one window onto three of the demos. The other
-# six are text-only by design.
-[[example]]
-name = "viewer"
-required-features = ["macroquad-demos"]
-
 [[example]]
 name = "cartpole_env_runner"
 required-features = ["gymnasium-examples"]
@@ -151,9 +142,36 @@ name = "lunarlander"
 required-features = ["gymnasium-examples"]
 
 # Standalone workspace root — this crate is no longer a member of the dcc-core
-# workspace. An empty [workspace] tells cargo to treat this manifest as its own
-# root rather than searching upwards.
+# workspace. A [workspace] table tells cargo to treat this manifest as its own root
+# rather than searching upwards (R3 in doc/Conformance.md).
+#
+# `default-members` is the load-bearing line. Listing `examples-viz` as a member
+# without it would make plain `cargo build` and `cargo test` build the windowed
+# viewer — and therefore macroquad, and therefore a GL and windowing stack — for
+# everyone. Pinning the default to this package alone keeps the ordinary path
+# exactly as headless as before; the viewer is reached with
+# `-p dcc_sph_viz_examples`.
 [workspace]
+members = ["examples-viz"]
+default-members = ["."]
+
+# This crate is a TRANSLITERATION of AOgmaNeo's C++, and that is the point: module
+# names, function names and loop structure deliberately mirror the original so
+# `doc/MethodFidelity.md` can be audited method by method. `t % 20 == 0` reads the
+# same in both languages; `t.is_multiple_of(20)` reads better as Rust and worse as a
+# comparison against the source it is supposed to mirror. The demo environments are
+# transliterations of upstream's C++ too, and `examples-viz` compiles them as well.
+[workspace.lints.clippy]
+manual_is_multiple_of = "allow"
+needless_range_loop = "allow"
+
+# `examples/support/` gates its drawing helpers on
+# `#[cfg(feature = "macroquad-demos")]`. That feature exists in `examples-viz`, not
+# in the library — deliberately, since the whole point of R16 is that this package
+# carries no graphics dependency. Declaring the value tells rustc the cfg is known
+# and simply inactive here, rather than a typo. It creates no feature.
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("macroquad-demos"))'] }
 
 [profile.release]
 opt-level = 3

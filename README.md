@@ -110,15 +110,19 @@ Start here:
 
 ### Ported from OgmaNeoDemos
 
-Nine demos ported from [OgmaNeoDemos](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo), Ogma's own demo repository. Each doubles as an end-to-end check that a feature of the library works on a real problem. [`doc/Demos.md`](doc/Demos.md) records what each one does and where it departs from its source.
+Thirteen demos ported from [OgmaNeoDemos](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo), Ogma's own demo repository. Each doubles as an end-to-end check that a feature of the library works on a real problem. [`doc/Demos.md`](doc/Demos.md) records what each one does and where it departs from its source.
 
 | Demo | Command | Shows |
 | --- | --- | --- |
 | **Wavy Line** | `cargo run --release --example wavy_line` | Multi-channel prediction with N-step lookahead; verifies the `write_state`/`read_state` round trip every step. |
 | **Wavy Classify** | `cargo run --release --example wavy_classify` | Streaming five-way classification with the label withheld at inference. Reports a confusion matrix. |
 | **Ball Physics** | `cargo run --release --example ball_physics` | `ImageEncoder` + `reconstruct()`: after five seed frames it generates the bouncing ball from its own predictions. |
+| **Video Prediction** | `cargo run --release --example video_prediction` | RGB frames through an `ImageEncoder`, then a generated clip. Procedural source; `--frames` for real ones. |
+| **VSA Char** | `cargo run --release --example vsa_char` | A whole word compressed into one hypervector — which *is* a CSDR, so there is no encoder. |
 | **Pusher** | `cargo run --release --example pusher` | `Actor` on a multi-column action port with a dense shaped reward. |
 | **Cat and Mouse** | `cargo run --release --example cat_mouse` | **Two hierarchies** competing in one maze, zero-sum reward. |
+| **Cat and Mouse + memory** | `cargo run --release --example cat_mouse_pos` | A port's own prediction fed back as its next input: dead reckoning learned end to end. |
+| **Explore** | `cargo run --release --example explore` | Curiosity as the entire reward — the agent is paid for its own prediction error. |
 | **Car Racing** | `cargo run --release --example car_racing` | Steering a real track from twelve raycast sensors. Completes laps. |
 | **Runner** | `cargo run --release --example runner` | An eight-motor articulated body learning a gait. The hardest of the set. |
 | **Encoder Visualiser** | `cargo run --release --example enc_vis` | What the ART encoder's cells actually learn, as weight profiles and a scatter. |
@@ -126,7 +130,7 @@ Nine demos ported from [OgmaNeoDemos](https://github.com/jacobeverist/OgmaNeoDem
 
 Each takes `--steps`, `--seed`, `--every` and `--quiet`; `--seed` fully determines a run. The RL demos measure themselves against a random-action baseline on the same world and seed, so the numbers mean something.
 
-Adding `--features macroquad-demos` opens a window for the demos where motion is the point. It is a way to eyeball a demo, not instrumentation, and it changes nothing about the simulation or the reported numbers.
+A windowed viewer lives in the separate `examples-viz` crate — `cargo run --release -p dcc_sph_viz_examples --example viewer` — for the demos where motion is the point. It is a way to eyeball a demo, not instrumentation, and it changes nothing about the simulation or the reported numbers. It is a separate crate so that no graphics dependency appears in the library's manifest; see [`doc/Conformance.md`](doc/Conformance.md).
 
 ### Running the Gymnasium demos
 

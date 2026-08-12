@@ -1,8 +1,8 @@
 # Demos
 
-Nine demos ported from [`jacobeverist/OgmaNeoDemos`](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo) (branch `aogmaneo`), Ogma Intelligent Systems Corp, CC BY-NC-SA 4.0 — the same licence as this crate. The attribution required by §3(a) is in [`PROVENANCE.md`](../PROVENANCE.md); this file is the engineering half, recording what each demo does and where it departs from its source.
+Thirteen demos ported from [`jacobeverist/OgmaNeoDemos`](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo) (branch `aogmaneo`), Ogma Intelligent Systems Corp, CC BY-NC-SA 4.0 — the same licence as this crate. The attribution required by §3(a) is in [`PROVENANCE.md`](../PROVENANCE.md); this file is the engineering half, recording what each demo does and where it departs from its source.
 
-They all **run headless and text-only with no features enabled**. That is the default path and the one CI builds. The optional `macroquad-demos` feature opens a window for the demos where motion is the point; it exists so a demo can be eyeballed quickly, not as instrumentation — that is dcc-dashboard's job.
+They all **run headless and text-only with no features enabled**. That is the default path and the one CI builds. A windowed viewer lives in the separate `examples-viz` crate for the demos where motion is the point; it exists so a demo can be eyeballed quickly, not as instrumentation — that is dcc-dashboard's job.
 
 ## Running them
 
@@ -312,11 +312,15 @@ Of the 69 top-level demos upstream, 27 link AOgmaNeo.
 
 ## Graphics
 
-The whole of the `macroquad-demos` feature is one extra target, `examples/viewer.rs`:
+The whole of the graphics story is one extra target, `examples-viz/examples/viewer.rs`, **in its own crate**:
 
 ```bash
-cargo run --release --example viewer --features macroquad-demos -- --demo car_racing
+cargo run --release -p dcc_sph_viz_examples --example viewer -- --demo car_racing
 ```
+
+That separation is required rather than stylistic. R16 of dcc-core's import contract (see [`Conformance.md`](Conformance.md)) says local applications belong in a separate crate, not behind an optional feature — an optional dependency is still a real `[dependencies]` entry that lands in the lockfile and constrains resolution for every consumer. `macroquad` therefore does not appear in the library's manifest at all, and `r10_runtime_dependencies_stay_minimal` fails the build if it comes back. The Gymnasium runners are making the same move for `pyo3`.
+
+`[workspace] default-members = ["."]` is what keeps plain `cargo build` and `cargo test` from pulling a GL stack in anyway.
 
 `--demo` takes `ball_physics`, `cat_mouse` or `car_racing` — the three where motion is the point. It trains live and draws what is happening, the way the upstream SFML demos do. Space fast-forwards; Escape quits; in `ball_physics`, `G` closes the loop so the hierarchy generates from its own predictions.
 
@@ -324,7 +328,7 @@ The other six demos are text-only by design. A scrolling plot, an ASCII frame or
 
 Two things keep this honest. The viewer builds its hierarchies through the same `build_hierarchy` functions in `support/env/` that the headless demos use, so the two configurations cannot drift apart. And `support/viz.rs` is five functions — `View`, `blit_gray`, `plot_series`, `scatter`, `hud`. If it starts growing state, options or layout logic, that is the signal the work belongs in dcc-dashboard rather than here.
 
-The feature is optional and kept out of `--all-features` in CI, for the same reason as `gymnasium-examples`: a CI runner has no display. CI checks it still compiles; opening a window is not CI's job.
+CI builds the crate in its own job and no further: opening a window is not CI's job, and a runner has no display to open one on.
 
 ## What CI does
 

@@ -2,7 +2,7 @@
 //
 // Each module holds only the world simulation and its encoding — no hierarchy
 // setup, no reporting, no drawing. That split is what lets a demo run identically
-// headless and under the optional `macroquad-demos` feature.
+// headless and under the windowed viewer in `examples-viz`.
 
 pub mod ball;
 pub mod catmouse;

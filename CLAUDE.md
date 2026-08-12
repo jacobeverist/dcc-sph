@@ -70,22 +70,27 @@ examples/
   cartpole_env_runner.rs  — CartPole-v1 via gymnasium (--features gymnasium-examples)
   lunarlander.rs          — LunarLander-v3 via gymnasium (--features gymnasium-examples)
   support/                — shared demo scaffolding (see below)
-  wavy_line.rs, wavy_classify.rs, ball_physics.rs, pusher.rs, cat_mouse.rs,
+  wavy_line.rs, wavy_classify.rs, ball_physics.rs, video_prediction.rs,
+  vsa_char.rs, pusher.rs, cat_mouse.rs, cat_mouse_pos.rs, explore.rs,
   car_racing.rs, runner.rs, enc_vis.rs, topo_test.rs
                           — ported from OgmaNeoDemos; see doc/Demos.md
-  viewer.rs               — the only windowed target (--features macroquad-demos)
+examples-viz/             — SEPARATE CRATE; macroquad lives here, not in the library
+  examples/
+    viewer.rs             — the only windowed target
 assets/                   — the two track bitmaps car_racing needs
 ```
 
 ### Demos
 
-Nine demos ported from [OgmaNeoDemos](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo) (Ogma's own, same CC BY-NC-SA 4.0 licence — attribution is in `PROVENANCE.md`). **[`doc/Demos.md`](doc/Demos.md) is the reference**: it records each demo's upstream source and every deviation from it, and several of those deviations are load-bearing rather than cosmetic.
+Thirteen demos ported from [OgmaNeoDemos](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo) (Ogma's own, same CC BY-NC-SA 4.0 licence — attribution is in `PROVENANCE.md`). **[`doc/Demos.md`](doc/Demos.md) is the reference**: it records each demo's upstream source and every deviation from it, and several of those deviations are load-bearing rather than cosmetic.
 
-They **run headless and text-only with no features enabled**, which is the default path and the one CI runs. Keep it that way — the optional `macroquad-demos` feature exists so a demo can be eyeballed, not as instrumentation. Real visualisation is dcc-dashboard's job, and `examples/support/viz.rs` should stay at five functions.
+They **run headless and text-only with no features enabled**, which is the default path and the one CI runs. Keep it that way — the windowed viewer exists so a demo can be eyeballed, not as instrumentation. Real visualisation is dcc-dashboard's job, and `examples/support/viz.rs` should stay at five functions.
+
+**The viewer is a separate crate, and that is a conformance requirement rather than a preference.** R16 of dcc-core's import contract says local applications belong in a separate crate, not behind an optional feature: an optional dependency is still a real `[dependencies]` entry that lands in the lockfile and constrains resolution for every consumer. `r10_runtime_dependencies_stay_minimal` in `tests/conformance.rs` fails the build if anything but `rayon` (and `pyo3`, pending its own move) appears there. Read [`doc/Conformance.md`](doc/Conformance.md) before adding any dependency.
 
 Shared code lives in `examples/support/`, pulled into each demo with `#[path = "support/mod.rs"] mod support;` — the idiom `fidelity_dump.rs` already uses for `tests/support/`. Cargo does not auto-discover a directory under `examples/` without a `main.rs`, so it is not itself a target. Example targets default to `test = false`, so `tests/demos_support.rs` includes the same tree to get its unit tests run.
 
-`png` and `rapier2d` are plain **dev-dependencies**, not optional dependencies: cargo builds them only for examples, tests and benches, so no consumer of the crate ever pulls them. Only `macroquad` is optional-plus-feature, mirroring `pyo3`/`gymnasium-examples`.
+`png` and `rapier2d` are plain **dev-dependencies**, not optional dependencies: cargo builds them only for examples, tests and benches, so no consumer of the crate ever pulls them, and `getrandom` stays out of the lockfile so R12 keeps holding. `macroquad` is not a dependency of this package at all — it belongs to `examples-viz`.
 
 When adding a demo, give it an explicit `[[example]]` block, keep the environment in `support/env/`, and have it report against a baseline — a bare number with nothing to compare it to cannot distinguish learning from noise, which is how several real bugs in this suite were found.
 

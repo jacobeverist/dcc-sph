@@ -166,11 +166,15 @@ jobs:
       - name: Check the pyo3-gated examples still build
         run: cargo check --examples --features gymnasium-examples
 
-  # Same reasoning as above, for the same reason it is not `--all-features`: the
-  # windowed demo shells need a display, which a CI runner does not have. Checking
-  # that the feature still compiles is worth doing; opening a window is not CI's job.
-  macroquad-feature:
-    name: macroquad-demos compiles
+  # The windowed viewer lives in `examples-viz/`, a separate workspace member, so
+  # macroquad is not a dependency of the library at all — R16 in doc/Conformance.md,
+  # and the same move the Gymnasium runners are making. `default-members` keeps it
+  # out of the job above, so it needs its own build here.
+  #
+  # Compiling it is the whole check: opening a window is not CI's job, and a runner
+  # has no display to open one on.
+  viz-crate:
+    name: examples-viz compiles
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -179,5 +183,5 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libx11-dev libxi-dev libgl1-mesa-dev libasound2-dev
-      - name: Check the windowed demo shells still build
-        run: cargo check --examples --features macroquad-demos
+      - name: Check the windowed viewer still builds
+        run: cargo check -p dcc_sph_viz_examples --examples

@@ -1,0 +1,54 @@
+[package]
+name = "dcc_sph_viz_examples"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Same licence as the library it demonstrates. CC BY-NC-SA 4.0 is NonCommercial and
+# ShareAlike; a crate that links dcc_sph inherits both.
+license = "CC-BY-NC-SA-4.0"
+
+# A SEPARATE CRATE so that `macroquad` never appears in the library's
+# `[dependencies]`.
+#
+# R16 of dcc-core's import contract (see ../doc/Conformance.md) is explicit that
+# local applications belong in a separate crate rather than behind an optional
+# feature of the library. An optional dependency is still a real `[dependencies]`
+# entry: it lands in the lockfile, it constrains version resolution for every
+# consumer, and it is one `default = [...]` edit away from being unavoidable.
+#
+# macroquad is milder than pyo3 — it sets no `links` key, so two majors would
+# merely duplicate rather than fail to resolve — but the structural argument is the
+# same one that moves the Gymnasium runners into `examples-gym`, and a windowing and
+# GL stack is precisely what a headless consumer should never have to resolve.
+#
+# The library keeps exactly one runtime dependency: rayon.
+
+[dependencies]
+dcc_sph = { path = ".." }
+macroquad = "0.4"
+
+# `examples/support/` is compiled whole by the viewer, and two of its environment
+# modules need these — `racing`/`video` decode PNGs, `runner` drives a rigid body.
+# They are ordinary dev-dependencies of the library; here they must be real
+# dependencies because this crate compiles that tree itself. Neither reaches a
+# consumer of dcc_sph either way.
+png = "0.17"
+rapier2d = "0.35"
+
+# `examples/support/` is shared with the library's own demos and gates its drawing
+# helpers on `#[cfg(feature = "macroquad-demos")]`. A `cfg` is evaluated in the
+# crate doing the including, so declaring the feature here is what switches
+# `support/viz.rs` on for this crate and leaves it off for the headless demos —
+# with no change to the shared module.
+[features]
+default = ["macroquad-demos"]
+macroquad-demos = []
+
+# The shared `examples/support/` tree is a transliteration of upstream C++, so it
+# needs the same lint allowances the library grants it.
+[lints]
+workspace = true
+
+[[example]]
+name = "viewer"
