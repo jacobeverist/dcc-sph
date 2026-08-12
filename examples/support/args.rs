@@ -57,6 +57,30 @@ impl Args {
         self.flags.contains(key)
     }
 
+    /// A plain copy.
+    ///
+    /// Named rather than deriving `Clone` so a caller has to mean it: `Args` is the
+    /// whole configuration of a run, and copying one is normally a sign of a sweep.
+    pub fn clone_args(&self) -> Args {
+        Args { values: self.values.clone(), flags: self.flags.clone() }
+    }
+
+    /// A copy with one value replaced. This is how `--sweep` varies a parameter:
+    /// the demo reads its knobs off `Args`, so overriding one and re-running is
+    /// enough — no demo needs to know it is being swept.
+    pub fn with_override(&self, key: &str, value: &str) -> Args {
+        let mut values = self.values.clone();
+        values.insert(key.to_string(), value.to_string());
+        Args { values, flags: self.flags.clone() }
+    }
+
+    /// A copy with a flag set.
+    pub fn with_flag(&self, key: &str) -> Args {
+        let mut flags = self.flags.clone();
+        flags.insert(key.to_string());
+        Args { values: self.values.clone(), flags }
+    }
+
     pub fn str(&self, key: &str) -> Option<&str> {
         self.values.get(key).map(|s| s.as_str())
     }
@@ -94,6 +118,25 @@ mod tests {
         assert!(a.flag("quiet"));
         assert!(!a.flag("steps"));
         assert_eq!(a.get::<usize>("missing", 42), 42);
+    }
+
+    #[test]
+    fn overrides_replace_a_value_without_touching_the_original() {
+        let base = args(&["--layers", "2", "--steps", "10"]);
+        let derived = base.with_override("layers", "5");
+        assert_eq!(derived.get::<usize>("layers", 0), 5);
+        assert_eq!(derived.get::<usize>("steps", 0), 10);
+        // The original is untouched, so a sweep can derive many points from one base.
+        assert_eq!(base.get::<usize>("layers", 0), 2);
+    }
+
+    #[test]
+    fn with_flag_adds_without_disturbing_values() {
+        let base = args(&["--steps", "10"]);
+        let derived = base.with_flag("silent");
+        assert!(derived.flag("silent"));
+        assert!(!base.flag("silent"));
+        assert_eq!(derived.get::<usize>("steps", 0), 10);
     }
 
     #[test]

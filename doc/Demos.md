@@ -38,6 +38,24 @@ Where a demo reports a baseline it also records the ratio (`goals_vs_random`, `f
 
 Without `--metrics` the recorder is inert: no file, no buffer, and the call returns before touching its arguments.
 
+## Running a demo more than once
+
+A single run of an RL demo does not tell you much, and this suite has already been misled by one: see the `wavy_classify` section below, where three separate claims in this file turned out to rest on single seeds.
+
+```bash
+--repeat 5                      # five seeds, reported as mean ± sample stddev
+--sweep layers=2,3,4,5          # once per value of --layers
+--sweep layers=2,3 --repeat 5   # both: five seeds at each of two settings
+```
+
+`--sweep` works by overriding one argument and re-running, so no demo needs to know it is being swept — it reads its knobs off `Args` as usual, and any argument is sweepable. Each sweep point sees the same seed sequence, so points are compared like for like.
+
+The output is a table of mean ± stddev per metric per point, plus a `learned` row giving the fraction of seeds whose verdict was positive. **That fraction is often the more informative number**: a task that works a third of the time and fails otherwise has a meaningless mean.
+
+In matrix mode each individual run is silenced (`--silent`, which suppresses the final report as well as the periodic lines that `--quiet` covers) — twenty runs of scatter plots and ASCII frames would bury the comparison. Every run still writes its own records to `--metrics`, tagged with its seed and sweep point, so nothing is lost to aggregation.
+
+A difference smaller than the spread is not a difference. The table prints that reminder under itself for a reason.
+
 ## Driving a demo programmatically
 
 Each demo's hierarchy lives in its environment module — `env::pusher::build_hierarchy()`, `env::ball::build()`, `env::wavy::build_line_hierarchy()`, and so on — rather than inline in `main`. The windowed viewer and the headless demo therefore cannot drift apart, and a caller can construct exactly the configuration a demo uses.
@@ -86,12 +104,31 @@ Typical result over 30k steps: 1-step MAE 0.0113 against 0.0359 for persistence;
 ### `wavy_classify`
 
 - **`ios[1].importance` defaults to 0.0, not upstream's 0.1.** `importance` weights an IO port on the *encoder input* side only; the decoder predicts that port from the hidden state regardless. At 0.1 the true label reaches the hidden state during training, and since the label is constant for `--hold` steps at a time, "predict the next label" is solved by the identity — copy the label just given. The decoder never learns to infer class from the signal, and at inference, when the label is withheld and the port is fed the model's own prediction, that identity latches onto whatever it emitted first: the confusion matrix collapses into a single column. At 0.0 the label cannot reach the hidden state at all and the decoder has to do real classification.
-- **The layer stack uses `ticks_per_update` 1, 2, 4, 8.** Telling these classes apart means measuring frequency — class 1 has a period of ~22 steps, class 0 of 80, and classes 3 and 4 differ only by a 40-step component — which needs tens of samples of context. A flat stack has only self-recurrence and sits at chance however long it trains. Upstream's `//lds[i].ticks_per_update = 2;` is commented out: the mechanism did not exist in that AOgmaNeo revision. Four layers beats five.
+- **The layer stack uses `ticks_per_update` 1, 2, 4, 8.** Telling these classes apart means measuring frequency — class 1 has a period of ~22 steps, class 0 of 80, and classes 3 and 4 differ only by a 40-step component — which needs tens of samples of context. A flat stack has only self-recurrence to work with. Upstream's `//lds[i].ticks_per_update = 2;` is commented out: the mechanism did not exist in that AOgmaNeo revision.
 - **Accuracy is measured.** Upstream never measures it at all — there is no counter anywhere in the file, and it is judged by eye from two overlaid curves. This reports a confusion matrix with per-class recall, both overall and excluding a settling window after each class switch.
 - **The `USE_SENSOR_DATA` path is not ported.** It needs `resources/training_camdataDetrend.txt`, 32,173 rows and 2.5 MB.
 - The demo also prints an *online* training accuracy, explicitly labelled optimistic: the decoder is updated toward the current target immediately before the activation that reads it, so it runs near 100% even when nothing generalisable has been learned. It is there to separate a shortcut from an inseparable task, which is how both problems above were found.
 
-Typical result: 66% settled accuracy against 20% chance.
+**This demo is strongly seed-dependent, and the numbers previously recorded here were a single lucky seed.** Running it under `--repeat` says so plainly:
+
+```bash
+cargo run --release --example wavy_classify -- --train-steps 60000 --test-steps 15000 --sweep layers=2,4 --repeat 3
+```
+
+| metric | layers=2 | layers=4 |
+|---|---|---|
+| settled_accuracy | 0.3104 ± 0.2446 | 0.3143 ± 0.2421 |
+| learned | 33% of runs | 33% of runs |
+
+Three things follow, and all three contradict what this file used to claim.
+
+**Only about a third of seeds learn.** The rest sit at chance. A seed that works reaches roughly 66% settled accuracy against 20% chance — which is where the previously quoted figure came from — but quoting it alone was misleading, because the spread across seeds (±0.24) is larger than the mean.
+
+**Layer count makes no measurable difference between 2 and 5.** All four settings land within 0.01 of each other against a seed-to-seed spread of 0.24 to 0.25. The earlier claim that "four layers beats five (75% vs 67%)" was two single-seed runs at different step counts, and does not survive repetition.
+
+**The `label_importance` difference is real in mechanism but not clear in aggregate.** Sweeping `label-importance=0.0,0.1` over four seeds gives 0.3147 ± 0.1977 against 0.2611 ± 0.2553 — a gap far smaller than the spread. What *is* visible is the predicted failure mode: at 0.1, classes 1 and 2 are never predicted at all (`recall_c1` 0.007, `recall_c2` 0.000), which is the identity-shortcut collapse described above. So the reasoning holds and the default stays at 0.0, but it should not be presented as a measured accuracy win.
+
+The honest summary is that this is a hard, high-variance task where the model either finds the structure or does not. Report it that way rather than quoting a best case — and note that the `learned` row of a sweep, which counts the fraction of seeds that succeeded, is the more informative number here than any mean.
 
 ### `ball_physics`
 

@@ -29,14 +29,15 @@ use support::encoder_probe::{probe_receptive_fields, CellField};
 use support::env::cluster::{build_enc_vis_encoder, DensityField};
 use support::report::{ascii_scatter, Bounds, Rolling};
 use support::metrics::{Recorder, Summary};
+use support::sweep;
 use support::rng::seed_everything;
 
 fn main() {
     let args = Args::parse();
-    let seed: u64 = args.get("seed", 12345);
 
     let mut rec = Recorder::from_args("enc_vis", &args);
-    run(&args, seed, &mut rec);
+    // `drive` runs this once normally, or many times under --repeat / --sweep.
+    sweep::drive(&args, &mut rec, run);
     rec.finish();
 }
 
@@ -53,7 +54,21 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     let cells: i32 = args.get("cells", 32);
     let plot_w: usize = args.get("plot-width", 78);
     let plot_h: usize = args.get("plot-height", 30);
-    let quiet = args.flag("quiet");
+    // `--silent` is set by the sweep driver in matrix mode: it suppresses the
+    // final report too, not just the periodic lines that `--quiet` covers.
+    let silent = args.flag("silent");
+    let quiet = silent || args.flag("quiet");
+
+    // Everything this run prints goes through `say!`, which honours --silent. The
+    // sweep driver sets that flag in matrix mode: twenty runs of scatter plots and
+    // ASCII frames would bury the comparison table the sweep exists to produce.
+    macro_rules! say {
+        ($($arg:tt)*) => {
+            if !silent {
+                println!($($arg)*);
+            }
+        };
+    }
 
     let mut rng = seed_everything(seed);
 
@@ -84,13 +99,13 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     params.lr = args.get("lr", params.lr);
     params.active_ratio = args.get("active-ratio", params.active_ratio);
 
-    println!("Encoder Visualiser — {columns} columns x {cells} cells over a 1x2x{resolution} input, seed {seed}");
-    println!("  {steps} samples drawn from a procedural density field (upstream's PNG is missing from the repo)");
-    println!(
+    say!("Encoder Visualiser — {columns} columns x {cells} cells over a 1x2x{resolution} input, seed {seed}");
+    say!("  {steps} samples drawn from a procedural density field (upstream's PNG is missing from the repo)");
+    say!(
         "  vigilance {:.3}, lr {:.3}, active_ratio {:.3}",
         params.vigilance, params.lr, params.active_ratio
     );
-    println!();
+    say!();
 
     let mut inputs = vec![0i32; 2];
 
@@ -114,7 +129,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
             if quiet {
                 continue;
             }
-            println!(
+            say!(
                 "  step {:>8} / {steps} | committed cells {committed:>4} / {} | quantisation error {err:.4}",
                 t + 1,
                 fields.len()
@@ -133,8 +148,8 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
         .collect();
     let data_points = field.points(3_000, &mut rng);
 
-    println!("\nLearned cell positions (#) over the density they were sampled from (.):\n");
-    println!(
+    say!("\nLearned cell positions (#) over the density they were sampled from (.):\n");
+    say!(
         "{}",
         ascii_scatter(
             &[('.', &data_points), ('#', &cell_points)],
@@ -144,7 +159,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
         )
     );
 
-    println!(
+    say!(
         "  {} of {} cells committed; the rest never won a column and have no position.",
         committed.len(),
         fields.len()
@@ -160,7 +175,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     } else {
         committed.iter().map(|f| f.compactness()).sum::<f32>() / committed.len() as f32
     };
-    println!(
+    say!(
         "  Each committed cell responds to {mean_spread:.1} of the {resolution} input levels, compactness {mean_compactness:.2}."
     );
 
@@ -173,8 +188,8 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     // are the ground truth the summary is derived from, and they show immediately
     // whether a centroid means anything.
 
-    println!("\nWeight profiles — one row per cell, one column per input level ('#' learned):\n");
-    println!("      {:<40} {:<40}", "x input column", "y input column");
+    say!("\nWeight profiles — one row per cell, one column per input level ('#' learned):\n");
+    say!("      {:<40} {:<40}", "x input column", "y input column");
 
     let sample_cells: Vec<&CellField> = committed.iter().copied().take(12).collect();
     for f in &sample_cells {
@@ -183,7 +198,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
             .iter()
             .map(|p| support::encoder_probe::render_profile(p, 40))
             .collect();
-        println!(
+        say!(
             "  c{}/{:<3} {} {}  compactness {:.2}",
             f.column,
             f.cell,
@@ -194,14 +209,14 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     }
 
     let final_err = quantisation_error(&mut e, &params, &field, &mut rng, 20_000, resolution);
-    println!(
+    say!(
         "\n  Quantisation error: {final_err:.4} (mean distance from a sample to its winning cell's centroid)"
     );
 
     // A uniform grid of `cells` prototypes over a unit square would sit roughly
     // this far from a random point.
     let uniform_baseline = 0.5 / (cells as f32).sqrt();
-    println!("  Uniform-grid reference: {uniform_baseline:.4} for {cells} cells over the unit square");
+    say!("  Uniform-grid reference: {uniform_baseline:.4} for {cells} cells over the unit square");
 
     // --- Probe ---
     //
@@ -209,14 +224,14 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     // fixed probes make the same point: nearby inputs share cells, distant ones
     // do not.
 
-    println!("\nCodes for three probe points (each column's winning cell):");
+    say!("\nCodes for three probe points (each column's winning cell):");
     for &(u, v) in &[(0.25f32, 0.30f32), (0.27f32, 0.32f32), (0.72f32, 0.24f32)] {
         inputs[0] = bin_unit(u, resolution);
         inputs[1] = bin_unit(v, resolution);
         e.step(&[&inputs], false, &params);
-        println!("  ({u:.2}, {v:.2}) -> {:?}", e.get_hidden_cis());
+        say!("  ({u:.2}, {v:.2}) -> {:?}", e.get_hidden_cis());
     }
-    println!("  (the first two are neighbours and should share cells; the third should not)");
+    say!("  (the first two are neighbours and should share cells; the third should not)");
 
     let mut summary = Summary::new();
     summary.push("committed_cells", committed.len() as f64);
@@ -229,16 +244,16 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     // The honest summary. A low compactness means the centroid — and therefore the
     // scatter plot and the quantisation error above — is averaging over disjoint
     // regions of the input range, and neither number should be read as a position.
-    println!();
+    say!();
     if mean_compactness > 0.6 {
         summary.verdict(final_err < uniform_baseline, "cells learned contiguous input bands");
-        println!(
+        say!(
             "Cells learned contiguous input bands (compactness {mean_compactness:.2}), so the centroids above are real positions."
         );
         if final_err < uniform_baseline {
-            println!("They also concentrate where the density is: quantisation error beats a uniform grid.");
+            say!("They also concentrate where the density is: quantisation error beats a uniform grid.");
         } else {
-            println!(
+            say!(
                 "They do not yet beat a uniform grid on quantisation error — try more --steps."
             );
         }
@@ -247,33 +262,33 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
         // coder, not a self-organising map, so a scattered set is the correct
         // outcome and is reported as one.
         summary.verdict(true, "cells learned scattered input sets — ART, not a SOM");
-        println!(
+        say!(
             "Cells learned *scattered* input sets (compactness {mean_compactness:.2}, {mean_spread:.1} levels each),"
         );
-        println!("not contiguous bands — and that is the encoder working as specified.");
-        println!();
-        println!(
+        say!("not contiguous bands — and that is the encoder working as specified.");
+        say!();
+        say!(
             "A cell commits to whichever inputs it happens to win on, and nothing in ART forces"
         );
-        println!(
+        say!(
             "those to be neighbours: this is an exemplar coder, not a self-organising map. Raising"
         );
-        println!(
+        say!(
             "`--vigilance` makes each cell far more selective (try 0.99: ~2 levels instead of ~17)"
         );
-        println!("but the levels it keeps are still scattered, because selectivity and topology are");
-        println!("different properties and only the first is what vigilance controls.");
-        println!();
-        println!(
+        say!("but the levels it keeps are still scattered, because selectivity and topology are");
+        say!("different properties and only the first is what vigilance controls.");
+        say!();
+        say!(
             "So read the profiles, not the scatter: the centroid, and the quantisation error derived"
         );
-        println!(
+        say!(
             "from it, average over disjoint regions and are not positions. This is also why the port"
         );
-        println!(
+        say!(
             "cannot reproduce upstream's picture — `demos/EncVis.cpp` reads a stored `vl.means`, a"
         );
-        println!(
+        say!(
             "running average that is a position by construction and cannot represent a split set."
         );
     }

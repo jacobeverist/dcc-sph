@@ -25,6 +25,7 @@ use support::env::racing::{
 };
 use support::report::Rolling;
 use support::metrics::{Recorder, Summary};
+use support::sweep;
 use support::rng::{seed_everything, Rng};
 
 /// Frames held straight at the start, before the policy takes over. Upstream's
@@ -33,10 +34,10 @@ const WARMUP_FRAMES: usize = 10;
 
 fn main() {
     let args = Args::parse();
-    let seed: u64 = args.get("seed", 12345);
 
     let mut rec = Recorder::from_args("car_racing", &args);
-    run(&args, seed, &mut rec);
+    // `drive` runs this once normally, or many times under --repeat / --sweep.
+    sweep::drive(&args, &mut rec, run);
     rec.finish();
 }
 
@@ -57,7 +58,21 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
             .to_string_lossy()
             .into_owned(),
     );
-    let quiet = args.flag("quiet");
+    // `--silent` is set by the sweep driver in matrix mode: it suppresses the
+    // final report too, not just the periodic lines that `--quiet` covers.
+    let silent = args.flag("silent");
+    let quiet = silent || args.flag("quiet");
+
+    // Everything this run prints goes through `say!`, which honours --silent. The
+    // sweep driver sets that flag in matrix mode: twenty runs of scatter plots and
+    // ASCII frames would bury the comparison table the sweep exists to produce.
+    macro_rules! say {
+        ($($arg:tt)*) => {
+            if !silent {
+                println!($($arg)*);
+            }
+        };
+    }
 
     let mut rng = seed_everything(seed);
 
@@ -95,16 +110,16 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     let mut env = Racing::new(track);
 
-    println!("Car Racing — {steps} frames, seed {seed}");
-    println!("  track: {track_desc}");
-    println!(
+    say!("Car Racing — {steps} frames, seed {seed}");
+    say!("  track: {track_desc}");
+    say!(
         "  1 layer 5x5x32, IO0 ({SENSOR_GRID},{SENSOR_GRID},{SENSOR_RES}) Prediction ({NUM_SENSORS} sensors), IO1 (1,1,{STEER_RES}) Action"
     );
-    println!(
+    say!(
         "  random baseline: {:.1} crashes and {:.0} distance per 1000 frames",
         baseline.0, baseline.1
     );
-    println!();
+    say!();
 
     let mut sensor_cis = vec![0i32; SENSOR_GRID * SENSOR_GRID];
     let mut action_cis = vec![0i32; 1];
@@ -171,7 +186,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
                 window_distance = 0.0;
                 continue;
             }
-            println!(
+            say!(
                 "  frame {:>8} / {steps} | reward EMA {:>8.3} | per 1000: {:>5.1} crashes, {:>7.0} distance | best run {:.0}",
                 t + 1,
                 reward_ema.ema(),
@@ -190,14 +205,14 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     let crashes_per_1000 = crashes as f64 * per1000;
     let distance_per_1000 = total_distance * per1000;
 
-    println!();
-    println!("Over {steps} frames:");
-    println!("  crashes          {crashes} ({crashes_per_1000:.1} per 1000 frames)");
-    println!("  distance         {distance_per_1000:.0} per 1000 frames");
-    println!("  furthest run     {best_lap_distance:.0} (lap length {:.0})", env.track.lap_length);
-    println!("  laps completed   {laps}");
-    println!("  reward EMA       {:.3}", reward_ema.ema());
-    println!(
+    say!();
+    say!("Over {steps} frames:");
+    say!("  crashes          {crashes} ({crashes_per_1000:.1} per 1000 frames)");
+    say!("  distance         {distance_per_1000:.0} per 1000 frames");
+    say!("  furthest run     {best_lap_distance:.0} (lap length {:.0})", env.track.lap_length);
+    say!("  laps completed   {laps}");
+    say!("  reward EMA       {:.3}", reward_ema.ema());
+    say!(
         "  random baseline  {:.1} crashes, {:.0} distance per 1000 frames",
         baseline.0, baseline.1
     );
@@ -212,13 +227,13 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     summary.push("reward_ema", reward_ema.ema() as f64);
 
     if crashes_per_1000 < baseline.0 * 0.8 && distance_per_1000 > baseline.1 * 1.2 {
-        println!("\nLearned: crashing less and covering more track than random steering.");
+        say!("\nLearned: crashing less and covering more track than random steering.");
         summary.verdict(true, "crashing less and covering more track than random steering");
     } else if distance_per_1000 > baseline.1 * 1.2 {
-        println!("\nPartly learned: covering more track than random steering, but crashing as often.");
+        say!("\nPartly learned: covering more track than random steering, but crashing as often.");
         summary.verdict(false, "covering more track than random, but crashing as often");
     } else {
-        println!("\nNot converged: no clear gain on the random baseline — try more --steps.");
+        say!("\nNot converged: no clear gain on the random baseline — try more --steps.");
         summary.verdict(false, "no clear gain on the random baseline");
     }
 

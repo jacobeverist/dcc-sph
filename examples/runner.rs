@@ -27,14 +27,15 @@ use support::env::runner::{
 };
 use support::report::Rolling;
 use support::metrics::{Recorder, Summary};
+use support::sweep;
 use support::rng::{seed_everything, Rng};
 
 fn main() {
     let args = Args::parse();
-    let seed: u64 = args.get("seed", 12345);
 
     let mut rec = Recorder::from_args("runner", &args);
-    run(&args, seed, &mut rec);
+    // `drive` runs this once normally, or many times under --repeat / --sweep.
+    sweep::drive(&args, &mut rec, run);
     rec.finish();
 }
 
@@ -45,7 +46,21 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     let steps: usize = args.get("steps", 300_000);
     let baseline_steps: usize = args.get("baseline-steps", 30_000);
     let every: usize = args.get("every", 50_000);
-    let quiet = args.flag("quiet");
+    // `--silent` is set by the sweep driver in matrix mode: it suppresses the
+    // final report too, not just the periodic lines that `--quiet` covers.
+    let silent = args.flag("silent");
+    let quiet = silent || args.flag("quiet");
+
+    // Everything this run prints goes through `say!`, which honours --silent. The
+    // sweep driver sets that flag in matrix mode: twenty runs of scatter plots and
+    // ASCII frames would bury the comparison table the sweep exists to produce.
+    macro_rules! say {
+        ($($arg:tt)*) => {
+            if !silent {
+                println!($($arg)*);
+            }
+        };
+    }
 
     let mut rng = seed_everything(seed);
 
@@ -65,17 +80,17 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     let mut world = RunnerWorld::new();
 
-    println!("Runner — {steps} control steps at 60 Hz, seed {seed}");
-    println!(
+    say!("Runner — {steps} control steps at 60 Hz, seed {seed}");
+    say!(
         "  1 layer 5x5x64, IO0 (4,6,{SENSOR_RES}) None ({SENSOR_COUNT} sensors), IO1 (2,4,{ACTION_RES}) Action ({NUM_SEGMENTS} motors)"
     );
-    println!(
+    say!(
         "  random baseline: {:.2} m furthest, {:.1} resets per 1000 steps, {:.0}% of them stalls",
         baseline.furthest,
         baseline.resets_per_1000,
         baseline.stall_fraction * 100.0
     );
-    println!();
+    say!();
 
     let mut state = vec![0.0f32; STATE_SIZE];
     let mut sensor_cis = vec![0i32; SENSOR_COLUMNS];
@@ -149,7 +164,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
                 ],
             );
             if !quiet {
-                println!(
+                say!(
                     "  step {:>8} / {steps} | mean velocity {:>6.2} m/s | furthest this window {:>6.2} m | {:>5.1} resets per 1000",
                     t + 1,
                     velocity.ema(),
@@ -166,22 +181,22 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     let resets_per_1000 = resets as f64 * 1000.0 / steps as f64;
 
-    println!();
-    println!("Over {steps} control steps:");
+    say!();
+    say!("Over {steps} control steps:");
     let stall_fraction = if resets == 0 { 0.0 } else { stuck as f64 / resets as f64 };
 
-    println!(
+    say!(
         "  furthest reached  {furthest:.2} m (random: {:.2} m)",
         baseline.furthest
     );
-    println!("  mean velocity     {:.3} m/s", velocity.mean());
-    println!(
+    say!("  mean velocity     {:.3} m/s", velocity.mean());
+    say!(
         "  resets            {resets} ({resets_per_1000:.1} per 1000 steps, random: {:.1})",
         baseline.resets_per_1000
     );
-    println!("    fell over       {flipped}");
-    println!("    hit a hurdle    {hit_wall}");
-    println!(
+    say!("    fell over       {flipped}");
+    say!("    hit a hurdle    {hit_wall}");
+    say!(
         "    stalled         {stuck} ({:.0}% of resets, random: {:.0}%)",
         stall_fraction * 100.0,
         baseline.stall_fraction * 100.0
@@ -209,15 +224,15 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     );
 
     if travels && engages {
-        println!(
+        say!(
             "\nLearned: travelling several times further than a flailing body, and reaching hurdles\nrather than stalling in place."
         );
         summary.verdict(true, "travelling far further than a flailing body, and reaching hurdles");
     } else if travels {
-        println!("\nPartly learned: covering more ground than random flailing, but still stalling often.");
+        say!("\nPartly learned: covering more ground than random flailing, but still stalling often.");
         summary.verdict(false, "covering more ground than random, but still stalling often");
     } else {
-        println!(
+        say!(
             "\nNot converged: no further than random flailing. This is by far the hardest problem in\nthe suite — a gait has to be discovered from a sparse velocity signal across eight\ncoupled motors — so expect it to need far more --steps than the other demos."
         );
         summary.verdict(false, "no further than random flailing");

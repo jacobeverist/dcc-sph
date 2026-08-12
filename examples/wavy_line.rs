@@ -27,15 +27,16 @@ use support::env::wavy::{
     build_line_hierarchy, WavyLine, LINE_COLUMN_SIZE as COLUMN_SIZE, LINE_MAX, LINE_MIN,
 };
 use support::metrics::{Recorder, Summary};
+use support::sweep;
 use support::report::{sparkline, Rolling};
 use support::rng::seed_everything;
 
 fn main() {
     let args = Args::parse();
-    let seed: u64 = args.get("seed", 12345);
 
     let mut rec = Recorder::from_args("wavy_line", &args);
-    run(&args, seed, &mut rec);
+    // `drive` runs this once normally, or many times under --repeat / --sweep.
+    sweep::drive(&args, &mut rec, run);
     rec.finish();
 }
 
@@ -47,7 +48,21 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     let num_inputs: usize = args.get("inputs", 2);
     let every: usize = args.get("every", 2_000);
     let noise: f32 = args.get("noise", 0.0);
-    let quiet = args.flag("quiet");
+    // `--silent` is set by the sweep driver in matrix mode: it suppresses the
+    // final report too, not just the periodic lines that `--quiet` covers.
+    let silent = args.flag("silent");
+    let quiet = silent || args.flag("quiet");
+
+    // Everything this run prints goes through `say!`, which honours --silent. The
+    // sweep driver sets that flag in matrix mode: twenty runs of scatter plots and
+    // ASCII frames would bury the comparison table the sweep exists to produce.
+    macro_rules! say {
+        ($($arg:tt)*) => {
+            if !silent {
+                println!($($arg)*);
+            }
+        };
+    }
     // Verifying the snapshot round trip costs one comparison per step, so it is
     // on by default; `--no-check-state` turns it off.
     let check_state = !args.flag("no-check-state");
@@ -69,11 +84,11 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     let mut env = WavyLine::new(num_inputs);
     env.noise = noise;
 
-    println!("Wavy Line — {num_inputs} signals, {steps} steps, {ahead}-step lookahead, seed {seed}");
-    println!(
+    say!("Wavy Line — {num_inputs} signals, {steps} steps, {ahead}-step lookahead, seed {seed}");
+    say!(
         "  1 layer 5x5x32, IO {num_inputs}x(1,1,{COLUMN_SIZE}) Prediction, range [{LINE_MIN}, {LINE_MAX}], noise {noise}"
     );
-    println!();
+    say!();
 
     // --- Metric accumulators ---
     //
@@ -198,7 +213,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
             );
 
             if !quiet {
-                println!(
+                say!(
                     "step {:>7} | MAE 1-step {:.4} (persist {:.4})  {}-step {:.4} (persist {:.4}) | jumps {}",
                     t + 1,
                     mae_1.mean(),
@@ -208,22 +223,22 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
                     mae_persist_n.mean(),
                     env.jumps(),
                 );
-                println!("  signal 0 actual    {}", sparkline(&trace_actual.as_slice()));
-                println!("  signal 0 predicted {}", sparkline(&trace_pred.as_slice()));
+                say!("  signal 0 actual    {}", sparkline(&trace_actual.as_slice()));
+                say!("  signal 0 predicted {}", sparkline(&trace_pred.as_slice()));
             }
         }
     }
 
     // --- Summary ---
 
-    println!();
-    println!("Final over the last {} scored steps:", mae_1.len());
-    println!(
+    say!();
+    say!("Final over the last {} scored steps:", mae_1.len());
+    say!(
         "  1-step      MAE {:.4}   vs persistence {:.4}",
         mae_1.mean(),
         mae_persist_1.mean()
     );
-    println!(
+    say!(
         "  {ahead}-step      MAE {:.4}   vs persistence {:.4}",
         mae_n.mean(),
         mae_persist_n.mean()
@@ -234,7 +249,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     // inside a bin, the expected absolute error is a quarter of the bin width —
     // that is the number a converged 1-step MAE should approach, not go under by much.
     let bin_width = (LINE_MAX - LINE_MIN) / (COLUMN_SIZE - 1) as f32;
-    println!(
+    say!(
         "  encoder limit   {:.4}   (mean quantisation error; bin width {:.4} over {COLUMN_SIZE} levels)",
         bin_width * 0.25,
         bin_width
@@ -242,11 +257,11 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     if ahead > 1 && check_state {
         if state_mismatches == 0 {
-            println!(
+            say!(
                 "\nState round trip: OK — {steps} write_state/read_state cycles left predictions identical."
             );
         } else {
-            println!(
+            say!(
                 "\nState round trip: FAILED — {state_mismatches}/{steps} cycles changed the prediction."
             );
         }
@@ -270,20 +285,20 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
                 mae_n.mean(),
                 mae_persist_n.mean()
             );
-            println!("\nLearned: {note}.");
+            say!("\nLearned: {note}.");
             summary.verdict(true, note);
         } else {
             let note = format!(
                 "the {ahead}-step prediction has not beaten persistence yet — try more --steps"
             );
-            println!("\nNot converged: {note}.");
+            say!("\nNot converged: {note}.");
             summary.verdict(false, note);
         }
     } else if mae_1.mean() < mae_persist_1.mean() {
-        println!("\nLearned: the 1-step prediction beats 1-step persistence.");
+        say!("\nLearned: the 1-step prediction beats 1-step persistence.");
         summary.verdict(true, "the 1-step prediction beats 1-step persistence");
     } else {
-        println!("\nNot converged: try more --steps, or --ahead > 1 for a less trivial baseline.");
+        say!("\nNot converged: try more --steps, or --ahead > 1 for a less trivial baseline.");
         summary.verdict(false, "try more --steps, or --ahead > 1");
     }
 

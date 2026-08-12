@@ -27,14 +27,15 @@ use support::encode::bin_unit;
 use support::env::pusher::{build_hierarchy, Outcome, PusherWorld, ACTION_RES, SENSOR_RES};
 use support::report::Rolling;
 use support::metrics::{Recorder, Summary};
+use support::sweep;
 use support::rng::{seed_everything, Rng};
 
 fn main() {
     let args = Args::parse();
-    let seed: u64 = args.get("seed", 12345);
 
     let mut rec = Recorder::from_args("pusher", &args);
-    run(&args, seed, &mut rec);
+    // `drive` runs this once normally, or many times under --repeat / --sweep.
+    sweep::drive(&args, &mut rec, run);
     rec.finish();
 }
 
@@ -54,7 +55,21 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     // upstream, which has no episode limit; see `PusherWorld::timeout` for why the
     // demo collapses without one.
     let timeout: usize = args.get("timeout", 500);
-    let quiet = args.flag("quiet");
+    // `--silent` is set by the sweep driver in matrix mode: it suppresses the
+    // final report too, not just the periodic lines that `--quiet` covers.
+    let silent = args.flag("silent");
+    let quiet = silent || args.flag("quiet");
+
+    // Everything this run prints goes through `say!`, which honours --silent. The
+    // sweep driver sets that flag in matrix mode: twenty runs of scatter plots and
+    // ASCII frames would bury the comparison table the sweep exists to produce.
+    macro_rules! say {
+        ($($arg:tt)*) => {
+            if !silent {
+                println!($($arg)*);
+            }
+        };
+    }
 
     let mut rng = seed_everything(seed);
 
@@ -78,13 +93,13 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     let mut world = PusherWorld::new();
     world.timeout = timeout;
 
-    println!("Pusher — {steps} steps, seed {seed}");
-    println!("  1 layer 7x7x32, IO0 (2,2,{SENSOR_RES}) Prediction, IO1 (1,2,{ACTION_RES}) Action (importance 0)");
-    println!(
+    say!("Pusher — {steps} steps, seed {seed}");
+    say!("  1 layer 7x7x32, IO0 (2,2,{SENSOR_RES}) Prediction, IO1 (1,2,{ACTION_RES}) Action (importance 0)");
+    say!(
         "  random baseline over {baseline_steps} steps: {:.1} goals and {:.1} losses per 100k steps",
         baseline.0, baseline.1
     );
-    println!();
+    say!();
 
     let mut reward_ema = Rolling::new(100_000, 0.0001);
     let mut goals = 0u64;
@@ -141,7 +156,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
                 ],
             );
             if !quiet {
-                println!(
+                say!(
                     "  step {:>8} / {steps} | reward EMA {:>8.4} | per 100k: {:.1} goals, {:.1} lost",
                     t + 1,
                     reward_ema.ema(),
@@ -160,12 +175,12 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     let goals_per_100k = goals as f64 * scale;
     let losses_per_100k = losses as f64 * scale;
 
-    println!();
-    println!("Over {steps} steps:");
-    println!("  goals reached   {goals} ({goals_per_100k:.1} per 100k steps)");
-    println!("  object lost     {losses} ({losses_per_100k:.1} per 100k steps)");
-    println!("  reward EMA      {:.4}", reward_ema.ema());
-    println!(
+    say!();
+    say!("Over {steps} steps:");
+    say!("  goals reached   {goals} ({goals_per_100k:.1} per 100k steps)");
+    say!("  object lost     {losses} ({losses_per_100k:.1} per 100k steps)");
+    say!("  reward EMA      {:.4}", reward_ema.ema());
+    say!(
         "  random baseline {:.1} goals, {:.1} lost per 100k steps",
         baseline.0, baseline.1
     );
@@ -184,13 +199,13 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     );
 
     if goals_per_100k > baseline.0 * 1.5 {
-        println!(
+        say!(
             "\nLearned: reaching the goal far more often than random action does ({goals_per_100k:.1} vs {:.1} per 100k).",
             baseline.0
         );
         summary.verdict(true, "reaching the goal far more often than random action");
     } else {
-        println!(
+        say!(
             "\nNot converged: no clear improvement on the random baseline — try more --steps."
         );
         summary.verdict(false, "no clear improvement on the random baseline");

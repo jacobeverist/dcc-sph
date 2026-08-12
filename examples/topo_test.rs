@@ -35,14 +35,15 @@ use support::encoder_probe::{probe_receptive_fields, CellField};
 use support::env::cluster::{build_topo_encoder, gaussian_clusters};
 use support::report::{ascii_scatter, Bounds};
 use support::metrics::{Recorder, Summary};
+use support::sweep;
 use support::rng::seed_everything;
 
 fn main() {
     let args = Args::parse();
-    let seed: u64 = args.get("seed", 12345);
 
     let mut rec = Recorder::from_args("topo_test", &args);
-    run(&args, seed, &mut rec);
+    // `drive` runs this once normally, or many times under --repeat / --sweep.
+    sweep::drive(&args, &mut rec, run);
     rec.finish();
 }
 
@@ -57,7 +58,21 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     let resolution: i32 = args.get("resolution", 64);
     let plot_w: usize = args.get("plot-width", 78);
     let plot_h: usize = args.get("plot-height", 30);
-    let quiet = args.flag("quiet");
+    // `--silent` is set by the sweep driver in matrix mode: it suppresses the
+    // final report too, not just the periodic lines that `--quiet` covers.
+    let silent = args.flag("silent");
+    let quiet = silent || args.flag("quiet");
+
+    // Everything this run prints goes through `say!`, which honours --silent. The
+    // sweep driver sets that flag in matrix mode: twenty runs of scatter plots and
+    // ASCII frames would bury the comparison table the sweep exists to produce.
+    macro_rules! say {
+        ($($arg:tt)*) => {
+            if !silent {
+                println!($($arg)*);
+            }
+        };
+    }
 
     let mut rng = seed_everything(seed);
 
@@ -77,14 +92,14 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     let mut e = build_topo_encoder(hidden, resolution);
     let params = Params::default();
 
-    println!(
+    say!(
         "Topology Test — hidden {}x{}x{} over a 1x2x{resolution} input, seed {seed}",
         hidden.x, hidden.y, hidden.z
     );
-    println!(
+    say!(
         "  {num_clusters} Gaussian clusters x {points_per_cluster} points, {steps} training samples"
     );
-    println!();
+    say!();
 
     let mut inputs = vec![0i32; 2];
 
@@ -110,7 +125,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
             if quiet {
                 continue;
             }
-            println!(
+            say!(
                 "  step {:>8} / {steps} | committed {committed:>4} / {} | neighbour distance {topo:.4} over {chains} chains",
                 t + 1,
                 fields.len()
@@ -130,8 +145,8 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
         .collect();
     let data_points: Vec<(f32, f32)> = data.iter().map(|&(x, y, _)| (x, y)).collect();
 
-    println!("\nLearned cell positions (#) over the cluster data (.):\n");
-    println!(
+    say!("\nLearned cell positions (#) over the cluster data (.):\n");
+    say!(
         "{}",
         ascii_scatter(
             &[('.', &data_points), ('#', &cell_points)],
@@ -141,7 +156,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
         )
     );
 
-    println!(
+    say!(
         "  {} of {} cells committed.",
         committed.len(),
         fields.len()
@@ -150,10 +165,10 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     let (topo, chains) = topology_score(&fields, hidden.z as usize);
     let shuffled = shuffled_baseline(&committed);
 
-    println!("\nTopology:");
-    println!("  neighbour distance  {topo:.4}  (mean gap between cells adjacent within a column)");
-    println!("  scrambled baseline  {shuffled:.4}  (mean gap between randomly paired cells)");
-    println!("  measured over {chains} adjacent pairs");
+    say!("\nTopology:");
+    say!("  neighbour distance  {topo:.4}  (mean gap between cells adjacent within a column)");
+    say!("  scrambled baseline  {shuffled:.4}  (mean gap between randomly paired cells)");
+    say!("  measured over {chains} adjacent pairs");
 
     let mut summary = Summary::new();
     summary.push("neighbour_distance", topo as f64);
@@ -162,51 +177,51 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     summary.push("committed_cells", committed.len() as f64);
     summary.push("total_cells", fields.len() as f64);
 
-    println!();
+    say!();
     if topo < shuffled * 0.8 {
         summary.verdict(true, "adjacent cells sit closer together than chance");
-        println!(
+        say!(
             "Organised: cells adjacent within a column sit closer together than chance, so the"
         );
-        println!("columns have laid themselves out along the data rather than scattering.");
+        say!("columns have laid themselves out along the data rather than scattering.");
     } else {
         // Not a failure. `Encoder` has no topology-forming mechanism at all, so
         // this is the correct answer and more training cannot change it.
         summary.verdict(true, "no topology — Encoder has no neighbourhood learning");
-        println!(
+        say!(
             "Not organised: adjacent cells are no closer than randomly paired ones. This is the"
         );
-        println!("expected answer, and more training will not change it.");
-        println!();
-        println!(
+        say!("expected answer, and more training will not change it.");
+        say!();
+        say!(
             "`Encoder` has no topology-forming mechanism. Its only neighbourhood parameter,"
         );
-        println!(
+        say!(
             "`Params::l_radius`, drives *lateral inhibition* — it decides whether a column is"
         );
-        println!(
+        say!(
             "allowed to learn at all by counting how many neighbours scored higher. It never"
         );
-        println!(
+        say!(
             "updates a neighbour's weights. Learning touches the winning cell and nothing else, so"
         );
-        println!("cell index within a column carries no spatial meaning.");
-        println!();
-        println!(
+        say!("cell index within a column carries no spatial meaning.");
+        say!();
+        say!(
             "Contrast `ImageEncoder`, which is a genuine SOM: it carries `Params::falloff` and"
         );
-        println!(
+        say!(
             "`Params::n_radius`, and updates cells at distance d from the winner at `rate *"
         );
-        println!(
+        say!(
             "falloff^d`. Topology is a property of that encoder, not of this one — which is worth"
         );
-        println!("knowing before reaching for `Encoder` expecting a map.");
-        println!();
-        println!(
+        say!("knowing before reaching for `Encoder` expecting a map.");
+        say!();
+        say!(
             "Upstream's `demos/Topo_Test_AON.cpp` probes an AOgmaNeo revision whose encoder stored"
         );
-        println!(
+        say!(
             "`vl.means`, a different formulation; the difference is algorithmic, not a port defect."
         );
     }

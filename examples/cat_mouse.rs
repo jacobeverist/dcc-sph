@@ -28,6 +28,7 @@ use support::env::catmouse::{
 };
 use support::report::{sparkline, Rolling};
 use support::metrics::{Recorder, Summary};
+use support::sweep;
 use support::rng::{seed_everything, Rng};
 
 /// Physics runs at 120 Hz, control and learning at 30 Hz — four physics substeps
@@ -37,10 +38,10 @@ const DT: f32 = 1.0 / 120.0;
 
 fn main() {
     let args = Args::parse();
-    let seed: u64 = args.get("seed", 12345);
 
     let mut rec = Recorder::from_args("cat_mouse", &args);
-    run(&args, seed, &mut rec);
+    // `drive` runs this once normally, or many times under --repeat / --sweep.
+    sweep::drive(&args, &mut rec, run);
     rec.finish();
 }
 
@@ -62,7 +63,21 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     // without one a mouse that simply outruns the cat produces an episode that
     // never ends, and mean time-to-capture becomes unmeasurable.
     let timeout: usize = args.get("timeout", 600);
-    let quiet = args.flag("quiet");
+    // `--silent` is set by the sweep driver in matrix mode: it suppresses the
+    // final report too, not just the periodic lines that `--quiet` covers.
+    let silent = args.flag("silent");
+    let quiet = silent || args.flag("quiet");
+
+    // Everything this run prints goes through `say!`, which honours --silent. The
+    // sweep driver sets that flag in matrix mode: twenty runs of scatter plots and
+    // ASCII frames would bury the comparison table the sweep exists to produce.
+    macro_rules! say {
+        ($($arg:tt)*) => {
+            if !silent {
+                println!($($arg)*);
+            }
+        };
+    }
 
     let mut rng = seed_everything(seed);
 
@@ -93,17 +108,17 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     let mut cat_h = build_hierarchy();
     let mut mouse_h = build_hierarchy();
 
-    println!("Cat and Mouse — {steps} decisions at 30 Hz, seed {seed}");
-    println!("  maze {map_w}x{map_h} (generated; upstream's map0.png is missing from the repo)");
-    println!(
+    say!("Cat and Mouse — {steps} decisions at 30 Hz, seed {seed}");
+    say!("  maze {map_w}x{map_h} (generated; upstream's map0.png is missing from the repo)");
+    say!(
         "  two hierarchies, each 1 layer 5x5x128, IO0 (7,5,{OBS_RES}) None, IO1 (1,{ACTION_SIZE},{ACTION_RES}) Action"
     );
-    println!(
+    say!(
         "  random baseline: {:.1}% of episodes end in capture, mean {:.0} steps to capture",
         baseline.0 * 100.0,
         baseline.1
     );
-    println!();
+    say!();
 
     let mut cat_obs_cis = vec![0i32; OBS_SIZE];
     let mut mouse_obs_cis = vec![0i32; OBS_SIZE];
@@ -186,7 +201,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
             if quiet {
                 continue;
             }
-            println!(
+            say!(
                 "  step {:>8} / {steps} | captures {captures:>5} | capture rate {:>5.1}% | mean steps to capture {:>6.0} | mean separation {:.1}",
                 t + 1,
                 capture_rate.mean() * 100.0,
@@ -198,26 +213,26 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     // --- Report ---
 
-    println!();
-    println!("Over {steps} decisions ({episodes} episodes):");
-    println!("  captures            {captures}");
-    println!(
+    say!();
+    say!("Over {steps} decisions ({episodes} episodes):");
+    say!("  captures            {captures}");
+    say!(
         "  capture rate        {:.1}% of the last {} episodes (random: {:.1}%)",
         capture_rate.mean() * 100.0,
         capture_rate.len(),
         baseline.0 * 100.0
     );
-    println!(
+    say!(
         "  steps to capture    {:.0} (random: {:.0})",
         time_to_capture.mean(),
         baseline.1
     );
-    println!("  mean separation     {:.2}", separation.mean());
+    say!("  mean separation     {:.2}", separation.mean());
 
     if trend.len() >= 3 {
-        println!("\n  Steps-to-capture over training:");
-        println!("    {}", sparkline(&trend));
-        println!(
+        say!("\n  Steps-to-capture over training:");
+        say!("    {}", sparkline(&trend));
+        say!(
             "    (no direction is 'correct' here — the cat pulls it down, the mouse pushes it up,\n     and both are learning, so an arms race shows up as movement rather than convergence.)"
         );
     }
@@ -232,14 +247,14 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     summary.push("episodes", episodes as f64);
 
     if capture_rate.mean() > baseline.0 * 1.2 {
-        println!("\nThe cat is ahead: it catches the mouse more often than random movement does.");
+        say!("\nThe cat is ahead: it catches the mouse more often than random movement does.");
         summary.verdict(true, "the cat is ahead of random movement");
     } else if capture_rate.mean() < baseline.0 * 0.8 {
-        println!("\nThe mouse is ahead: it evades better than random movement does.");
+        say!("\nThe mouse is ahead: it evades better than random movement does.");
         // Not a failure: in a zero-sum chase, either side pulling ahead is a result.
         summary.verdict(true, "the mouse is ahead of random movement");
     } else {
-        println!("\nEvenly matched so far, or neither has learned much — try more --steps.");
+        say!("\nEvenly matched so far, or neither has learned much — try more --steps.");
         summary.verdict(false, "evenly matched, or neither has learned much");
     }
 

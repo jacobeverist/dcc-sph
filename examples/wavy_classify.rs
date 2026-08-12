@@ -31,15 +31,16 @@ use support::env::wavy::{
     CLASS_MIN, NUM_CLASSES,
 };
 use support::metrics::{Recorder, Summary};
+use support::sweep;
 use support::report::{confusion_table, Rolling};
 use support::rng::seed_everything;
 
 fn main() {
     let args = Args::parse();
-    let seed: u64 = args.get("seed", 12345);
 
     let mut rec = Recorder::from_args("wavy_classify", &args);
-    run(&args, seed, &mut rec);
+    // `drive` runs this once normally, or many times under --repeat / --sweep.
+    sweep::drive(&args, &mut rec, run);
     rec.finish();
 }
 
@@ -56,7 +57,21 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     // Steps after a class switch excluded from the "settled" accuracy figure.
     let settle: usize = args.get("settle", 200);
     let every: usize = args.get("every", 20_000);
-    let quiet = args.flag("quiet");
+    // `--silent` is set by the sweep driver in matrix mode: it suppresses the
+    // final report too, not just the periodic lines that `--quiet` covers.
+    let silent = args.flag("silent");
+    let quiet = silent || args.flag("quiet");
+
+    // Everything this run prints goes through `say!`, which honours --silent. The
+    // sweep driver sets that flag in matrix mode: twenty runs of scatter plots and
+    // ASCII frames would bury the comparison table the sweep exists to produce.
+    macro_rules! say {
+        ($($arg:tt)*) => {
+            if !silent {
+                println!($($arg)*);
+            }
+        };
+    }
     // Encoder-side weight of the label port. See the note below on why this
     // defaults to 0.0 rather than upstream's 0.1; `--label-importance 0.1`
     // reproduces upstream's configuration and its collapse.
@@ -81,15 +96,15 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     let mut env = WavyClassify::new();
 
-    println!(
+    say!(
         "Wavy Classify — {NUM_CLASSES} classes, {train_steps} train + {test_steps} test steps, seed {seed}"
     );
-    println!(
+    say!(
         "  {num_layers} layers 5x5x64 (ticks 1..{}), IO0 (1,1,{SIGNAL_COLUMN_SIZE}) Prediction signal, IO1 (1,1,{NUM_CLASSES}) Prediction label (importance {label_importance})",
         1usize << (num_layers - 1)
     );
-    println!("  class held for {hold} steps; first {settle} after a switch excluded from settled accuracy");
-    println!();
+    say!("  class held for {hold} steps; first {settle} after a switch excluded from settled accuracy");
+    say!();
 
     // --- Training: both ports observed ---
 
@@ -134,7 +149,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
                 &[("online_train_accuracy", train_hits.mean() as f64)],
             );
             if !quiet {
-                println!(
+                say!(
                     "  training step {:>7} / {train_steps} | settled train accuracy {:.1}%",
                     t + 1,
                     train_hits.mean() * 100.0
@@ -143,7 +158,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
         }
     }
 
-    println!(
+    say!(
         "\nOnline training accuracy over the last {} settled steps: {:.1}% (optimistic — see comment)",
         train_hits.len(),
         train_hits.mean() * 100.0
@@ -155,7 +170,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     // about the true class reaches it except through the signal. Learning is off,
     // matching upstream's `P` key.
 
-    println!("\nInference — label withheld, learning off:\n");
+    say!("\nInference — label withheld, learning off:\n");
 
     let mut confusion = vec![vec![0u64; NUM_CLASSES]; NUM_CLASSES];
     let mut settled_confusion = vec![vec![0u64; NUM_CLASSES]; NUM_CLASSES];
@@ -188,18 +203,18 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     let labels: Vec<String> = (0..NUM_CLASSES).map(|c| format!("c{c}")).collect();
 
-    println!("Confusion over all {test_steps} inference steps (rows true, columns predicted):");
-    println!("{}", confusion_table(&confusion, &labels));
-    println!("  overall accuracy  {:.1}%", accuracy(&confusion) * 100.0);
+    say!("Confusion over all {test_steps} inference steps (rows true, columns predicted):");
+    say!("{}", confusion_table(&confusion, &labels));
+    say!("  overall accuracy  {:.1}%", accuracy(&confusion) * 100.0);
 
-    println!(
+    say!(
         "\nExcluding the first {settle} steps after each class switch (settled):"
     );
-    println!("{}", confusion_table(&settled_confusion, &labels));
-    println!("  settled accuracy  {:.1}%", accuracy(&settled_confusion) * 100.0);
+    say!("{}", confusion_table(&settled_confusion, &labels));
+    say!("  settled accuracy  {:.1}%", accuracy(&settled_confusion) * 100.0);
 
     let chance = 1.0 / NUM_CLASSES as f64;
-    println!("  chance            {:.1}%", chance * 100.0);
+    say!("  chance            {:.1}%", chance * 100.0);
 
     let mut summary = Summary::new();
     summary.push("accuracy", accuracy(&confusion));
@@ -215,10 +230,10 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     }
 
     if accuracy(&settled_confusion) > chance * 2.0 {
-        println!("\nLearned: settled accuracy is well above chance.");
+        say!("\nLearned: settled accuracy is well above chance.");
         summary.verdict(true, "settled accuracy is well above chance");
     } else {
-        println!(
+        say!(
             "\nNot converged: settled accuracy is near chance — try more --train-steps or a longer --hold."
         );
         summary.verdict(false, "settled accuracy is near chance");

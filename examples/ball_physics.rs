@@ -25,6 +25,7 @@ use support::env::ball::{
     background_frame, build, detect_ball, frame_mse, BallWorld, EPISODE_FRAMES, FRAME_H, FRAME_W,
 };
 use support::metrics::{Recorder, Summary};
+use support::sweep;
 use support::report::{ascii_image, side_by_side, Rolling};
 use support::rng::seed_everything;
 
@@ -34,10 +35,10 @@ const SEED_FRAMES: usize = 5;
 
 fn main() {
     let args = Args::parse();
-    let seed: u64 = args.get("seed", 12345);
 
     let mut rec = Recorder::from_args("ball_physics", &args);
-    run(&args, seed, &mut rec);
+    // `drive` runs this once normally, or many times under --repeat / --sweep.
+    sweep::drive(&args, &mut rec, run);
     rec.finish();
 }
 
@@ -48,7 +49,21 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     let train_episodes: usize = args.get("train-episodes", 250);
     let gen_episodes: usize = args.get("gen-episodes", 3);
     let every: usize = args.get("every", 50);
-    let quiet = args.flag("quiet");
+    // `--silent` is set by the sweep driver in matrix mode: it suppresses the
+    // final report too, not just the periodic lines that `--quiet` covers.
+    let silent = args.flag("silent");
+    let quiet = silent || args.flag("quiet");
+
+    // Everything this run prints goes through `say!`, which honours --silent. The
+    // sweep driver sets that flag in matrix mode: twenty runs of scatter plots and
+    // ASCII frames would bury the comparison table the sweep exists to produce.
+    macro_rules! say {
+        ($($arg:tt)*) => {
+            if !silent {
+                println!($($arg)*);
+            }
+        };
+    }
     // Rows of ASCII per rendered frame. Terminal cells are about twice as tall as
     // they are wide, so the width is doubled to keep the picture square.
     let art_rows: usize = args.get("art-rows", 20);
@@ -68,12 +83,12 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     let mut world = BallWorld::new();
     let mut frame = vec![0u8; FRAME_W * FRAME_H];
 
-    println!(
+    say!(
         "Ball Physics — {train_episodes} training + {gen_episodes} generation episodes of {EPISODE_FRAMES} frames, seed {seed}"
     );
-    println!("  ImageEncoder {FRAME_W}x{FRAME_H}x1 radius 6 -> 20x20x16, hierarchy 2 layers 10x10x32");
-    println!("  generation closes the loop after {SEED_FRAMES} seed frames");
-    println!();
+    say!("  ImageEncoder {FRAME_W}x{FRAME_H}x1 radius 6 -> 20x20x16, hierarchy 2 layers 10x10x32");
+    say!("  generation closes the loop after {SEED_FRAMES} seed frames");
+    say!();
 
     // --- Training ---
 
@@ -108,7 +123,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
         if every > 0 && (ep + 1) % every == 0 {
             rec.sample(ep as u64 + 1, &[("train_mse", train_mse.mean() as f64)]);
             if !quiet {
-                println!(
+                say!(
                     "  training episode {:>5} / {train_episodes} | next-frame MSE {:.5}",
                     ep + 1,
                     train_mse.mean()
@@ -117,7 +132,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
         }
     }
 
-    println!("\nTraining done — next-frame MSE {:.5}\n", train_mse.mean());
+    say!("\nTraining done — next-frame MSE {:.5}\n", train_mse.mean());
 
     // --- Generation ---
     //
@@ -148,7 +163,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
         // its hidden CIs from scratch each step and has nothing to reset.
         h.clear_state();
 
-        println!("Generation episode {} / {gen_episodes}", ep + 1);
+        say!("Generation episode {} / {gen_episodes}", ep + 1);
 
         let mut pending: Option<Vec<u8>> = None;
         // The baseline to beat: hold the last real frame and never update it.
@@ -189,8 +204,8 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
                 if !quiet && art_every > 0 && closed_loop && f % art_every == 0 {
                     let pred_art = ascii_image(&p, FRAME_W, FRAME_H, art_rows * 2, art_rows);
                     let real_art = ascii_image(&frame, FRAME_W, FRAME_H, art_rows * 2, art_rows);
-                    println!("  frame {f:>3}  predicted (closed loop)          actual                                MSE {mse:.5}");
-                    println!("{}", side_by_side(&pred_art, &real_art, 4));
+                    say!("  frame {f:>3}  predicted (closed loop)          actual                                MSE {mse:.5}");
+                    say!("{}", side_by_side(&pred_art, &real_art, 4));
                 }
             }
 
@@ -214,28 +229,28 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     // --- Report ---
 
-    println!();
-    println!("Closed-loop generation over {} scored frames:", gen_mse.len());
-    println!("  ball still drawn   {:.1}% of frames", ball_present.mean() * 100.0);
-    println!(
+    say!();
+    say!("Closed-loop generation over {} scored frames:", gen_mse.len());
+    say!("  ball still drawn   {:.1}% of frames", ball_present.mean() * 100.0);
+    say!(
         "  position error     {:.2} m over {} frames where both balls were found",
         gen_pos_err.mean(),
         gen_pos_err.len()
     );
-    println!(
+    say!(
         "  frozen baseline    {:.2} m  (hold the last real frame forever)",
         frozen_pos_err.mean()
     );
-    println!(
+    say!(
         "  frame MSE          {:.5} generated vs {:.5} frozen",
         gen_mse.mean(),
         frozen_mse.mean()
     );
-    println!(
+    say!(
         "\n  (frame MSE is reported for completeness only — it prefers a blank frame to a\n   slightly misplaced ball, so position error is the metric that means something.)"
     );
 
-    println!("\n  Position error by how long the loop has run unaided:");
+    say!("\n  Position error by how long the loop has run unaided:");
     for (b, r) in by_horizon.iter().enumerate() {
         if r.is_empty() {
             continue;
@@ -244,7 +259,7 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
         let hi = lo + HORIZON_BUCKET - 1;
         // ~0.5 m per bar keeps the whole 15.6 m view on one line.
         let bar = "#".repeat(((r.mean() * 2.0) as usize).min(40));
-        println!("    frames {lo:>3}-{hi:<3}  {:>5.2} m  {bar}", r.mean());
+        say!("    frames {lo:>3}-{hi:<3}  {:>5.2} m  {bar}", r.mean());
     }
 
     let learned = ball_present.mean() > 0.5 && gen_pos_err.mean() < frozen_pos_err.mean();
@@ -265,17 +280,17 @@ fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     }
 
     if learned {
-        println!(
+        say!(
             "\nLearned: the generated ball persists and tracks the real one better than a frozen frame."
         );
         summary.verdict(true, "the generated ball persists and tracks better than a frozen frame");
     } else if ball_present.mean() <= 0.5 {
-        println!(
+        say!(
             "\nNot converged: the generated ball fades out — the model collapsed to predicting empty space. Try more --train-episodes."
         );
         summary.verdict(false, "the generated ball fades out");
     } else {
-        println!(
+        say!(
             "\nNot converged: the generated ball persists but drifts worse than a frozen frame. Try more --train-episodes."
         );
         summary.verdict(false, "the generated ball drifts worse than a frozen frame");
