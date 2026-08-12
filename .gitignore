@@ -25,3 +25,7 @@ fidelity/build/
 
 # the Gymnasium example runners look for a venv here
 .venv/
+
+# Claude Code local state (worktrees, session scratch) — never committed.
+# dcc-core ignores the same path for the same reason.
+.claude/
