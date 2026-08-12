@@ -23,6 +23,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+          # R12 of dcc-core's import contract: this crate must build for wasm32,
+          # because dcc-core ships a WebAssembly binding and anything it imports
+          # travels there. See doc/Conformance.md.
+          targets: wasm32-unknown-unknown
 
       - uses: actions/cache@v4
         with:
@@ -105,6 +109,20 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps
+
+      # R12. This crate has no `rand` dependency — its randomness is the PCG32 in
+      # `helpers`, which is what makes bit-exact parity with the AOgmaNeo C++ possible —
+      # so `getrandom` never enters the graph and this passes today. The step exists so
+      # it keeps passing: the sibling port dcc-sparsey shipped exactly that regression
+      # from extraction until 2026-08-12, invisible because dcc-core's own wasm build
+      # supplies a backend and masked it.
+      #
+      # `rayon` compiles for wasm32 with no threads and degrades to serial, which is
+      # fine here. If this step fails, the fix is `default-features = false` on whatever
+      # was added — NOT selecting a getrandom backend, which is a binary's decision.
+      # See doc/Conformance.md.
+      - name: Builds for wasm32 (R12)
+        run: cargo check --target wasm32-unknown-unknown
 
       # `cargo tree -d` ALWAYS exits 0 — it REPORTS duplicates, it does not fail on
       # them. So `run: cargo tree -d`, which is what this step was until 2026-08-12,
