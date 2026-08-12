@@ -11,33 +11,17 @@
 use dcc_sph::helpers::Int3;
 use dcc_sph::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
 
-// --- Encoding helpers ---
+#[path = "support/mod.rs"]
+mod support;
 
-/// Encode a float in [0, 1] as two 4-bit nibbles (2 columns, 16 cells each).
-fn unorm8_to_csdr(x: f32) -> [i32; 2] {
-    let i = (x * 255.0 + 0.5) as u8 as i32;
-    [i & 0x0f, (i >> 4) & 0x0f]
-}
-
-/// Decode two 4-bit nibble indices back to a float in [0, 1].
-fn csdr_to_unorm8(csdr: &[i32]) -> f32 {
-    (csdr[0] | (csdr[1] << 4)) as f32 / 255.0
-}
+// These three used to be defined here; they moved into the shared demo
+// scaffolding when the OgmaNeoDemos suite landed, since several demos need them.
+use support::encode::{csdr_to_unorm8, unorm8_to_csdr};
+use support::report::ascii_bar;
 
 /// The target waveform: 1.0 whenever t is divisible by 20 or 7, else 0.0.
 fn wave(t: usize) -> f32 {
     if t % 20 == 0 || t % 7 == 0 { 1.0 } else { 0.0 }
-}
-
-/// Render a float in [0,1] as a 16-character ASCII bar.
-fn ascii_bar(x: f32) -> String {
-    let filled = (x * 16.0 + 0.5) as usize;
-    let filled = filled.min(16);
-    let mut s = String::with_capacity(16);
-    for i in 0..16 {
-        s.push(if i < filled { '\u{2588}' } else { '\u{2591}' });
-    }
-    s
 }
 
 fn main() {

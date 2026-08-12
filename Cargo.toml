@@ -31,6 +31,13 @@ rayon = "1"
 # in that workspace, and with the feature off pyo3 never enters a consumer's graph.
 pyo3 = { version = "0.29", optional = true, features = ["auto-initialize"] }
 
+# Optional, and only for the windowed shells of the demo examples. The demos all
+# run headless and text-only without it; this exists so a demo can be eyeballed
+# quickly, not as instrumentation — that is dcc-dashboard's job. Optional for the
+# same reason pyo3 is: a normal build, and every consumer of this crate, pulls no
+# windowing or GL at all.
+macroquad = { version = "0.4", optional = true }
+
 # Lint policy, in the manifest rather than in lib.rs so it reaches examples, tests
 # and benches too — the lints below fire mostly in exactly those targets.
 #
@@ -58,9 +65,26 @@ harness = false
 # so it is not part of `--all-features` in CI.
 gymnasium-examples = ["dep:pyo3"]
 
+# Opens a window for the demo examples. Kept out of `--all-features` in CI for the
+# same reason as above: a headless runner has no display to open one on. The
+# demos' default path needs no feature at all.
+macroquad-demos = ["dep:macroquad"]
+
 [[example]]
 name = "fidelity_dump"
 path = "examples/fidelity_dump.rs"
+
+# --- Demos ported from OgmaNeoDemos (see doc/Demos.md) ---
+#
+# Declared explicitly rather than auto-discovered so the demo suite is legible
+# from the manifest. They share `examples/support/`, which cargo ignores as a
+# target because it has no `main.rs`; each demo pulls it in with `#[path]`, the
+# same idiom `fidelity_dump` uses for `tests/support/`.
+#
+# None of these require a feature: headless and text-only is the default path.
+
+[[example]]
+name = "wavy_line"
 
 [[example]]
 name = "cartpole_env_runner"
