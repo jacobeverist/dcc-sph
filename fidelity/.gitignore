@@ -1,0 +1,2 @@
+# Compiled C++ golden-vector generator (rebuild via build_and_generate.sh).
+cpp/generate_golden

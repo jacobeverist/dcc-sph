@@ -1,0 +1,101 @@
+name: CI
+
+# This crate used to be a member of the dcc-core workspace, where `cargo test
+# --workspace` ran its suite for free. It is standalone now, so if this file does
+# not run the tests, nothing does — and the suite rots invisibly rather than
+# failing. That is the whole reason this exists.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Build, test and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build
+        run: cargo build --all-targets
+
+      # RAYON_NUM_THREADS=1 is not tidiness. The fidelity comparison is bit-exact
+      # against a single-threaded C++ run, and while the parallel paths use
+      # deterministic per-column subseeds (so results ARE order-independent), pinning
+      # the thread count keeps a failure here meaning "the algorithm changed" rather
+      # than "the scheduler differed".
+      - name: Test
+        env:
+          RAYON_NUM_THREADS: 1
+        run: cargo test --all-targets
+
+      - name: Test (release)
+        env:
+          RAYON_NUM_THREADS: 1
+        run: cargo test --release
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Docs
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps
+
+      # `cargo tree -d` ALWAYS exits 0 — it REPORTS duplicates, it does not fail on
+      # them. So `run: cargo tree -d`, which is what this step was until 2026-08-12,
+      # guarded nothing: the job went green with any duplicate at all.
+      #
+      # Duplicates are not uniformly bad. Two `syn` majors arriving through unrelated
+      # proc-macros are ordinary and unfixable from here. Two `serde` or two `rand` are
+      # a different thing: the types stop being the same types across the boundary, and
+      # a second `rand` is a second RNG stream, which silently unseeds whatever draws
+      # from it. So print everything, fail on the short list that actually breaks.
+      - name: No duplicate core dependencies
+        run: |
+          echo "--- all duplicates (informational) ---"
+          cargo tree -d || true
+          dups=$(cargo tree -d 2>/dev/null \
+                 | grep -E '^(serde|rand|rand_core|rand_chacha|rand_xoshiro|schemars|thiserror) v[0-9]' \
+                 | sort -u)
+          if [ -n "$dups" ]; then
+            echo
+            echo "FAIL: more than one version of a core dependency is in the graph:"
+            echo "$dups"
+            exit 1
+          fi
+          echo
+          echo "OK: no duplicate core dependencies"
+
+  # Deliberately NOT part of the job above, and deliberately not `--all-features`:
+  # the `gymnasium-examples` feature pulls pyo3 with `auto-initialize`, which needs
+  # Python development headers, and the examples themselves need a venv with
+  # `gymnasium[box2d]`. Checking that the feature still COMPILES is worth doing;
+  # running the examples is not CI's job.
+  gymnasium-feature:
+    name: gymnasium-examples compiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check the pyo3-gated examples still build
+        run: cargo check --examples --features gymnasium-examples

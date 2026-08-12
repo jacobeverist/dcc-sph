@@ -1,0 +1,83 @@
+[package]
+name = "dcc_sph"
+version = "0.1.0"
+authors = ["Jacob Everist <jacob.everist@gmail.com>"]
+edition = "2021"
+description = "Sparse Predictive Hierarchies (SPH) — clean-room Rust port of AOgmaNeo"
+readme = "README.md"
+repository = "https://github.com/jacobeverist/dcc-sph"
+keywords = ["machine-learning", "neuroscience", "sph", "online-learning"]
+categories = ["science", "algorithms"]
+
+# CC BY-NC-SA 4.0 — the SAME license as upstream AOgmaNeo, which its ShareAlike
+# term requires of adapted material, and a Rust port is adapted material. Note it
+# is NONCOMMERCIAL: that restriction travels with this crate into anything that
+# links it. Attribution is a CONDITION of the grant, not a courtesy — see
+# PROVENANCE.md, which carries the notices §3(a) requires.
+license = "CC-BY-NC-SA-4.0"
+
+# Copyright (c) 2026 Jacob Everist, for the Rust port. AOgmaNeo itself is
+# © 2020-2025 Ogma Intelligent Systems Corp — that notice is upstream's and is
+# reproduced verbatim in PROVENANCE.md and AOGMANEO_LICENSE.md, never edited.
+
+[dependencies]
+rayon = "1"
+# Optional, and only for the two Gymnasium example runners. It stays optional so a
+# normal build (and every consumer of this crate) pulls no Python at all.
+#
+# This used to carry a note about staying in lockstep with dcc-core's Python
+# binding, because pyo3 sets `links = "python"` and a cargo workspace may contain
+# exactly one pyo3. Extraction dissolved that constraint: this crate is no longer
+# in that workspace, and with the feature off pyo3 never enters a consumer's graph.
+pyo3 = { version = "0.29", optional = true, features = ["auto-initialize"] }
+
+# Lint policy, in the manifest rather than in lib.rs so it reaches examples, tests
+# and benches too — the lints below fire mostly in exactly those targets.
+#
+# This crate is a TRANSLITERATION of AOgmaNeo's C++, and that is the point: module
+# names, function names and loop structure deliberately mirror the original so
+# `doc/MethodFidelity.md` can be audited method by method. `t % 20 == 0` reads the
+# same in both languages; `t.is_multiple_of(20)` reads better as Rust and worse as a
+# comparison against the source it is supposed to mirror.
+[lints.clippy]
+manual_is_multiple_of = "allow"
+needless_range_loop = "allow"
+
+[dev-dependencies]
+# Fidelity harness: JSON golden fixtures (serde) for the C++ parity test.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "sph_benchmarks"
+harness = false
+
+[features]
+# Needs a Python environment with `gymnasium[box2d]` as well as the crate feature,
+# so it is not part of `--all-features` in CI.
+gymnasium-examples = ["dep:pyo3"]
+
+[[example]]
+name = "fidelity_dump"
+path = "examples/fidelity_dump.rs"
+
+[[example]]
+name = "cartpole_env_runner"
+required-features = ["gymnasium-examples"]
+
+[[example]]
+name = "lunarlander"
+required-features = ["gymnasium-examples"]
+
+# Standalone workspace root — this crate is no longer a member of the dcc-core
+# workspace. An empty [workspace] tells cargo to treat this manifest as its own
+# root rather than searching upwards.
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+debug = true
+incremental = true
