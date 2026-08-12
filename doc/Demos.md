@@ -99,6 +99,8 @@ Each demo is also split into `run(args, seed, rec) -> Summary` and a `main` that
 | `vsa_char` | `demos/VSA_Char_Single.cpp` | Hypervector coding; a CSDR fed with no encoder |
 | `enc_vis` | `demos/EncVis.cpp` | Bare `Encoder`, receptive-field readout |
 | `topo_test` | `demos/Topo_Test_AON.cpp` | `Encoder` topology preservation |
+| `stacking_rl` | `demos/Stacking_RL.cpp` | Goal-conditioned RL; two routes for delivering the goal, compared |
+| `stacking_prog` | `demos/Stacking_Prog.cpp` | `step_with_goal`, and a goal distilled into a top-layer CSDR |
 
 ## Layout
 
