@@ -23,8 +23,8 @@
 //   cargo run --release --example topo_test
 //   cargo run --release --example topo_test -- --steps 200000 --clusters 4
 
-use dcc_sph::encoder::{Encoder, Params};
-use dcc_sph::helpers::{Int3, VisibleLayerDesc};
+use dcc_sph::encoder::Params;
+use dcc_sph::helpers::Int3;
 
 #[path = "support/mod.rs"]
 mod support;
@@ -32,15 +32,25 @@ mod support;
 use support::args::Args;
 use support::encode::bin_unit;
 use support::encoder_probe::{probe_receptive_fields, CellField};
-use support::env::cluster::gaussian_clusters;
+use support::env::cluster::{build_topo_encoder, gaussian_clusters};
 use support::report::{ascii_scatter, Bounds};
+use support::metrics::{Recorder, Summary};
 use support::rng::seed_everything;
 
 fn main() {
     let args = Args::parse();
+    let seed: u64 = args.get("seed", 12345);
+
+    let mut rec = Recorder::from_args("topo_test", &args);
+    run(&args, seed, &mut rec);
+    rec.finish();
+}
+
+/// One complete run. Split out from `main` so a repeat or a sweep can call it many
+/// times; everything it needs comes from `args` and `seed`.
+fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     let steps: usize = args.get("steps", 100_000);
-    let seed: u64 = args.get("seed", 12345);
     let every: usize = args.get("every", 25_000);
     let num_clusters: usize = args.get("clusters", 8);
     let points_per_cluster: usize = args.get("points", 100);
@@ -51,6 +61,12 @@ fn main() {
 
     let mut rng = seed_everything(seed);
 
+    // Config must be recorded before the first sample, which writes the run header.
+    rec.config("steps", steps);
+    rec.config("clusters", num_clusters);
+    rec.config("points", points_per_cluster);
+    rec.config("resolution", resolution);
+
     let data = gaussian_clusters(num_clusters, points_per_cluster, &mut rng);
 
     // --- Encoder ---
@@ -58,11 +74,7 @@ fn main() {
     // Upstream: hidden 4x4x16 over a 1x2x64 visible layer.
 
     let hidden = Int3::new(4, 4, 16);
-    let mut e = Encoder::default();
-    e.init_random(
-        hidden,
-        vec![VisibleLayerDesc { size: Int3::new(1, 2, resolution), radius: 2 }],
-    );
+    let mut e = build_topo_encoder(hidden, resolution);
     let params = Params::default();
 
     println!(
@@ -83,10 +95,21 @@ fn main() {
         inputs[1] = bin_unit(y * 0.5 + 0.5, resolution);
         e.step(&[&inputs], true, &params);
 
-        if !quiet && every > 0 && (t + 1) % every == 0 {
+        if every > 0 && (t + 1) % every == 0 {
             let fields = probe_receptive_fields(&e, 0);
             let (topo, chains) = topology_score(&fields, hidden.z as usize);
             let committed = fields.iter().filter(|f| f.is_committed()).count();
+            rec.sample(
+                t as u64 + 1,
+                &[
+                    ("committed_cells", committed as f64),
+                    ("neighbour_distance", topo as f64),
+                    ("adjacent_pairs", chains as f64),
+                ],
+            );
+            if quiet {
+                continue;
+            }
             println!(
                 "  step {:>8} / {steps} | committed {committed:>4} / {} | neighbour distance {topo:.4} over {chains} chains",
                 t + 1,
@@ -132,13 +155,24 @@ fn main() {
     println!("  scrambled baseline  {shuffled:.4}  (mean gap between randomly paired cells)");
     println!("  measured over {chains} adjacent pairs");
 
+    let mut summary = Summary::new();
+    summary.push("neighbour_distance", topo as f64);
+    summary.push("scrambled_baseline", shuffled as f64);
+    summary.push("adjacent_pairs", chains as f64);
+    summary.push("committed_cells", committed.len() as f64);
+    summary.push("total_cells", fields.len() as f64);
+
     println!();
     if topo < shuffled * 0.8 {
+        summary.verdict(true, "adjacent cells sit closer together than chance");
         println!(
             "Organised: cells adjacent within a column sit closer together than chance, so the"
         );
         println!("columns have laid themselves out along the data rather than scattering.");
     } else {
+        // Not a failure. `Encoder` has no topology-forming mechanism at all, so
+        // this is the correct answer and more training cannot change it.
+        summary.verdict(true, "no topology — Encoder has no neighbourhood learning");
         println!(
             "Not organised: adjacent cells are no closer than randomly paired ones. This is the"
         );
@@ -176,6 +210,9 @@ fn main() {
             "`vl.means`, a different formulation; the difference is algorithmic, not a port defect."
         );
     }
+
+    rec.finish_summary(&summary);
+    summary
 }
 
 /// Mean distance between the decoded positions of cells that are adjacent within a

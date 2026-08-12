@@ -11,6 +11,52 @@
 // briefly moving away from the goal.
 
 use crate::support::rng::Rng;
+use dcc_sph::helpers::Int3;
+use dcc_sph::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
+
+pub const SENSOR_RES: i32 = 16;
+pub const ACTION_RES: i32 = 5;
+
+/// The hierarchy `pusher` uses.
+///
+/// The action port's `up_radius: 0` gives it a 1x1 receptive field — the port is
+/// two columns wide and there is nothing next to them worth seeing — and
+/// `importance = 0.0` keeps it out of the encoder's input entirely, so the
+/// observation alone determines the state.
+pub fn build_hierarchy() -> Hierarchy {
+    let io_descs = vec![
+        IoDesc {
+            size: Int3::new(2, 2, SENSOR_RES),
+            io_type: IoType::Prediction,
+            num_dendrites_per_cell: 16,
+            up_radius: 2,
+            down_radius: 3,
+            ..Default::default()
+        },
+        IoDesc {
+            size: Int3::new(1, 2, ACTION_RES),
+            io_type: IoType::Action,
+            num_dendrites_per_cell: 16,
+            up_radius: 0,
+            down_radius: 3,
+            ..Default::default()
+        },
+    ];
+
+    let layer_descs = vec![LayerDesc {
+        hidden_size: Int3::new(7, 7, 32),
+        num_dendrites_per_cell: 4,
+        up_radius: 2,
+        recurrent_radius: 0,
+        down_radius: 2,
+        ticks_per_update: 1,
+    }];
+
+    let mut h = Hierarchy::new();
+    h.init_random(&io_descs, &layer_descs);
+    h.params.ios[1].importance = 0.0;
+    h
+}
 
 pub const OBJECT_RAD: f32 = 0.1;
 pub const PUSHER_RAD: f32 = 0.1;

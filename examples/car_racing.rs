@@ -24,6 +24,7 @@ use support::env::racing::{
     build_hierarchy, random_steer, Racing, Track, NUM_SENSORS, SENSOR_GRID, SENSOR_RES, STEER_RES,
 };
 use support::report::Rolling;
+use support::metrics::{Recorder, Summary};
 use support::rng::{seed_everything, Rng};
 
 /// Frames held straight at the start, before the policy takes over. Upstream's
@@ -32,10 +33,19 @@ const WARMUP_FRAMES: usize = 10;
 
 fn main() {
     let args = Args::parse();
+    let seed: u64 = args.get("seed", 12345);
+
+    let mut rec = Recorder::from_args("car_racing", &args);
+    run(&args, seed, &mut rec);
+    rec.finish();
+}
+
+/// One complete run. Split out from `main` so a repeat or a sweep can call it many
+/// times; everything it needs comes from `args` and `seed`.
+fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     let steps: usize = args.get("steps", 300_000);
     let baseline_steps: usize = args.get("baseline-steps", 50_000);
-    let seed: u64 = args.get("seed", 12345);
     let every: usize = args.get("every", 50_000);
     // Upstream layers 2% uniform-random steering on top of the actor's own
     // stochastic policy.
@@ -50,6 +60,10 @@ fn main() {
     let quiet = args.flag("quiet");
 
     let mut rng = seed_everything(seed);
+
+    // Config must be recorded before the first sample, which writes the run header.
+    rec.config("steps", steps);
+    rec.config("exploration", exploration);
 
     let track = match Track::load(std::path::Path::new(&assets)) {
         Ok(t) => t,
@@ -141,8 +155,22 @@ fn main() {
         h.step(&[&sensor_cis, &action_cis], true, reward, 0.0);
         reward_ema.push(reward);
 
-        if !quiet && every > 0 && (t + 1) % every == 0 {
+        if every > 0 && (t + 1) % every == 0 {
             let per1000 = 1000.0 / every as f64;
+            rec.sample(
+                t as u64 + 1,
+                &[
+                    ("reward_ema", reward_ema.ema() as f64),
+                    ("crashes_per_1000", window_crashes as f64 * per1000),
+                    ("distance_per_1000", window_distance * per1000),
+                    ("laps", laps as f64),
+                ],
+            );
+            if quiet {
+                window_crashes = 0;
+                window_distance = 0.0;
+                continue;
+            }
             println!(
                 "  frame {:>8} / {steps} | reward EMA {:>8.3} | per 1000: {:>5.1} crashes, {:>7.0} distance | best run {:.0}",
                 t + 1,
@@ -174,13 +202,28 @@ fn main() {
         baseline.0, baseline.1
     );
 
+    let mut summary = Summary::new();
+    summary.push("crashes_per_1000", crashes_per_1000);
+    summary.push("baseline_crashes_per_1000", baseline.0);
+    summary.push("distance_per_1000", distance_per_1000);
+    summary.push("baseline_distance_per_1000", baseline.1);
+    summary.push("laps", laps as f64);
+    summary.push("furthest_run", best_lap_distance as f64);
+    summary.push("reward_ema", reward_ema.ema() as f64);
+
     if crashes_per_1000 < baseline.0 * 0.8 && distance_per_1000 > baseline.1 * 1.2 {
         println!("\nLearned: crashing less and covering more track than random steering.");
+        summary.verdict(true, "crashing less and covering more track than random steering");
     } else if distance_per_1000 > baseline.1 * 1.2 {
         println!("\nPartly learned: covering more track than random steering, but crashing as often.");
+        summary.verdict(false, "covering more track than random, but crashing as often");
     } else {
         println!("\nNot converged: no clear gain on the random baseline — try more --steps.");
+        summary.verdict(false, "no clear gain on the random baseline");
     }
+
+    rec.finish_summary(&summary);
+    summary
 }
 
 /// Crashes and distance per 1000 frames under uniformly random steering.

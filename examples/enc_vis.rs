@@ -19,7 +19,6 @@
 //   cargo run --release --example enc_vis -- --steps 200000 --cells 64
 
 use dcc_sph::encoder::{Encoder, Params};
-use dcc_sph::helpers::{Int3, VisibleLayerDesc};
 
 #[path = "support/mod.rs"]
 mod support;
@@ -27,15 +26,25 @@ mod support;
 use support::args::Args;
 use support::encode::bin_unit;
 use support::encoder_probe::{probe_receptive_fields, CellField};
-use support::env::cluster::DensityField;
+use support::env::cluster::{build_enc_vis_encoder, DensityField};
 use support::report::{ascii_scatter, Bounds, Rolling};
+use support::metrics::{Recorder, Summary};
 use support::rng::seed_everything;
 
 fn main() {
     let args = Args::parse();
+    let seed: u64 = args.get("seed", 12345);
+
+    let mut rec = Recorder::from_args("enc_vis", &args);
+    run(&args, seed, &mut rec);
+    rec.finish();
+}
+
+/// One complete run. Split out from `main` so a repeat or a sweep can call it many
+/// times; everything it needs comes from `args` and `seed`.
+fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     let steps: usize = args.get("steps", 100_000);
-    let seed: u64 = args.get("seed", 12345);
     let every: usize = args.get("every", 25_000);
     // Cells per input column — upstream's `resolution`.
     let resolution: i32 = args.get("resolution", 128);
@@ -48,6 +57,12 @@ fn main() {
 
     let mut rng = seed_everything(seed);
 
+    // Config must be recorded before the first sample, which writes the run header.
+    rec.config("steps", steps);
+    rec.config("columns", columns);
+    rec.config("cells", cells);
+    rec.config("resolution", resolution);
+
     let field = DensityField::procedural(128, 128);
 
     // --- Encoder ---
@@ -56,11 +71,7 @@ fn main() {
     // The default radius of 2 means each hidden column's receptive field covers
     // both, so every cell sees a full (x, y) pair.
 
-    let mut e = Encoder::default();
-    e.init_random(
-        Int3::new(1, columns, cells),
-        vec![VisibleLayerDesc { size: Int3::new(1, 2, resolution), radius: 2 }],
-    );
+    let mut e = build_enc_vis_encoder(columns, cells, resolution);
 
     // Vigilance is the parameter this demo is really about, and the one worth
     // playing with. It sets how well an input must match a committed cell before
@@ -89,10 +100,20 @@ fn main() {
         inputs[1] = bin_unit(v, resolution);
         e.step(&[&inputs], true, &params);
 
-        if !quiet && every > 0 && (t + 1) % every == 0 {
+        if every > 0 && (t + 1) % every == 0 {
             let fields = probe_receptive_fields(&e, 0);
             let committed = fields.iter().filter(|f| f.is_committed()).count();
             let err = quantisation_error(&mut e, &params, &field, &mut rng, 2_000, resolution);
+            rec.sample(
+                t as u64 + 1,
+                &[
+                    ("committed_cells", committed as f64),
+                    ("quantisation_error", err as f64),
+                ],
+            );
+            if quiet {
+                continue;
+            }
             println!(
                 "  step {:>8} / {steps} | committed cells {committed:>4} / {} | quantisation error {err:.4}",
                 t + 1,
@@ -197,11 +218,20 @@ fn main() {
     }
     println!("  (the first two are neighbours and should share cells; the third should not)");
 
+    let mut summary = Summary::new();
+    summary.push("committed_cells", committed.len() as f64);
+    summary.push("total_cells", fields.len() as f64);
+    summary.push("mean_spread", mean_spread as f64);
+    summary.push("mean_compactness", mean_compactness as f64);
+    summary.push("quantisation_error", final_err as f64);
+    summary.push("uniform_baseline", uniform_baseline as f64);
+
     // The honest summary. A low compactness means the centroid — and therefore the
     // scatter plot and the quantisation error above — is averaging over disjoint
     // regions of the input range, and neither number should be read as a position.
     println!();
     if mean_compactness > 0.6 {
+        summary.verdict(final_err < uniform_baseline, "cells learned contiguous input bands");
         println!(
             "Cells learned contiguous input bands (compactness {mean_compactness:.2}), so the centroids above are real positions."
         );
@@ -213,6 +243,10 @@ fn main() {
             );
         }
     } else {
+        // Not a failure — the demo's finding is that this encoder is an exemplar
+        // coder, not a self-organising map, so a scattered set is the correct
+        // outcome and is reported as one.
+        summary.verdict(true, "cells learned scattered input sets — ART, not a SOM");
         println!(
             "Cells learned *scattered* input sets (compactness {mean_compactness:.2}, {mean_spread:.1} levels each),"
         );
@@ -243,6 +277,9 @@ fn main() {
             "running average that is a position by construction and cannot represent a split set."
         );
     }
+
+    rec.finish_summary(&summary);
+    summary
 }
 
 /// Mean distance from a sampled point to the position its winning cells decode to,

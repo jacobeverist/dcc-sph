@@ -17,17 +17,14 @@
 //   cargo run --release --example ball_physics
 //   cargo run --release --example ball_physics -- --train-episodes 400 --gen-episodes 3
 
-use dcc_sph::helpers::{Int3, VisibleLayerDesc};
-use dcc_sph::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
-use dcc_sph::image_encoder::ImageEncoder;
-
 #[path = "support/mod.rs"]
 mod support;
 
 use support::args::Args;
 use support::env::ball::{
-    background_frame, detect_ball, frame_mse, BallWorld, EPISODE_FRAMES, FRAME_H, FRAME_W,
+    background_frame, build, detect_ball, frame_mse, BallWorld, EPISODE_FRAMES, FRAME_H, FRAME_W,
 };
+use support::metrics::{Recorder, Summary};
 use support::report::{ascii_image, side_by_side, Rolling};
 use support::rng::seed_everything;
 
@@ -37,10 +34,19 @@ const SEED_FRAMES: usize = 5;
 
 fn main() {
     let args = Args::parse();
+    let seed: u64 = args.get("seed", 12345);
+
+    let mut rec = Recorder::from_args("ball_physics", &args);
+    run(&args, seed, &mut rec);
+    rec.finish();
+}
+
+/// One complete run. Split out from `main` so a repeat or a sweep can call it many
+/// times; everything it needs comes from `args` and `seed`.
+fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     let train_episodes: usize = args.get("train-episodes", 250);
     let gen_episodes: usize = args.get("gen-episodes", 3);
-    let seed: u64 = args.get("seed", 12345);
     let every: usize = args.get("every", 50);
     let quiet = args.flag("quiet");
     // Rows of ASCII per rendered frame. Terminal cells are about twice as tall as
@@ -50,45 +56,14 @@ fn main() {
 
     let mut rng = seed_everything(seed);
 
-    // --- Image encoder ---
-    //
-    // 64x64 single-channel input compressed to 20x20 columns of 16 cells, with a
-    // radius-6 receptive field. Upstream's `hiddenSize` and `imgVlds[0]`.
+    rec.config("train_episodes", train_episodes);
+    rec.config("gen_episodes", gen_episodes);
+    rec.config("seed_frames", SEED_FRAMES);
 
-    let enc_hidden = Int3::new(20, 20, 16);
-
-    let mut enc = ImageEncoder::default();
-    enc.init_random(
-        enc_hidden,
-        vec![VisibleLayerDesc { size: Int3::new(FRAME_W as i32, FRAME_H as i32, 1), radius: 6 }],
-    );
-
-    // --- Hierarchy ---
-    //
-    // Two layers of 10x10x32 over a single Prediction port sized to the encoder's
-    // output. `up_radius: 4` is upstream's; the encoder CSDR is 20x20, so a
-    // radius-2 field would see too little of it per column.
-
-    let io_descs = vec![IoDesc {
-        size: enc_hidden,
-        io_type: IoType::Prediction,
-        up_radius: 4,
-        ..Default::default()
-    }];
-
-    let layer_descs: Vec<LayerDesc> = (0..2)
-        .map(|_| LayerDesc {
-            hidden_size: Int3::new(10, 10, 32),
-            num_dendrites_per_cell: 4,
-            up_radius: 2,
-            recurrent_radius: 0,
-            down_radius: 2,
-            ticks_per_update: 1,
-        })
-        .collect();
-
-    let mut h = Hierarchy::new();
-    h.init_random(&io_descs, &layer_descs);
+    // Encoder and hierarchy are built together in `support/env/ball.rs`: the
+    // hierarchy's IO port is sized to the encoder's hidden layer, so the two
+    // configurations cannot be chosen apart.
+    let (mut enc, mut h) = build();
 
     let mut world = BallWorld::new();
     let mut frame = vec![0u8; FRAME_W * FRAME_H];
@@ -130,12 +105,15 @@ fn main() {
             world.step();
         }
 
-        if !quiet && every > 0 && (ep + 1) % every == 0 {
-            println!(
-                "  training episode {:>5} / {train_episodes} | next-frame MSE {:.5}",
-                ep + 1,
-                train_mse.mean()
-            );
+        if every > 0 && (ep + 1) % every == 0 {
+            rec.sample(ep as u64 + 1, &[("train_mse", train_mse.mean() as f64)]);
+            if !quiet {
+                println!(
+                    "  training episode {:>5} / {train_episodes} | next-frame MSE {:.5}",
+                    ep + 1,
+                    train_mse.mean()
+                );
+            }
         }
     }
 
@@ -270,17 +248,39 @@ fn main() {
     }
 
     let learned = ball_present.mean() > 0.5 && gen_pos_err.mean() < frozen_pos_err.mean();
+
+    let mut summary = Summary::new();
+    summary.push("ball_present", ball_present.mean() as f64);
+    summary.push("position_error", gen_pos_err.mean() as f64);
+    summary.push("frozen_position_error", frozen_pos_err.mean() as f64);
+    summary.push("generated_mse", gen_mse.mean() as f64);
+    summary.push("frozen_mse", frozen_mse.mean() as f64);
+    summary.push("train_mse", train_mse.mean() as f64);
+    // The rollout curve, so a sweep can see where tracking breaks down rather than
+    // only that the average moved.
+    for (b, r) in by_horizon.iter().enumerate() {
+        if !r.is_empty() {
+            summary.push(&format!("position_error_h{}", b * HORIZON_BUCKET), r.mean() as f64);
+        }
+    }
+
     if learned {
         println!(
             "\nLearned: the generated ball persists and tracks the real one better than a frozen frame."
         );
+        summary.verdict(true, "the generated ball persists and tracks better than a frozen frame");
     } else if ball_present.mean() <= 0.5 {
         println!(
             "\nNot converged: the generated ball fades out — the model collapsed to predicting empty space. Try more --train-episodes."
         );
+        summary.verdict(false, "the generated ball fades out");
     } else {
         println!(
             "\nNot converged: the generated ball persists but drifts worse than a frozen frame. Try more --train-episodes."
         );
+        summary.verdict(false, "the generated ball drifts worse than a frozen frame");
     }
+
+    rec.finish_summary(&summary);
+    summary
 }

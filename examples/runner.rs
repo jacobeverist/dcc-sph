@@ -15,8 +15,6 @@
 //   cargo run --release --example runner
 //   cargo run --release --example runner -- --steps 500000
 
-use dcc_sph::helpers::Int3;
-use dcc_sph::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
 
 #[path = "support/mod.rs"]
 mod support;
@@ -24,26 +22,36 @@ mod support;
 use support::args::Args;
 use support::encode::{bin_sigmoid, bin_unit};
 use support::env::runner::{
-    ResetReason, RunnerWorld, NUM_SEGMENTS, SENSOR_COUNT, STATE_SIZE,
+    build_hierarchy, ResetReason, RunnerWorld, ACTION_RES, NUM_SEGMENTS, SENSOR_COLUMNS,
+    SENSOR_COUNT, SENSOR_RES, STATE_SIZE,
 };
 use support::report::Rolling;
+use support::metrics::{Recorder, Summary};
 use support::rng::{seed_everything, Rng};
-
-const SENSOR_RES: i32 = 21;
-const ACTION_RES: i32 = 11;
-/// 4x6 columns for 23 sensors; the last stays at zero, as upstream leaves it.
-const SENSOR_COLUMNS: usize = 24;
 
 fn main() {
     let args = Args::parse();
+    let seed: u64 = args.get("seed", 12345);
+
+    let mut rec = Recorder::from_args("runner", &args);
+    run(&args, seed, &mut rec);
+    rec.finish();
+}
+
+/// One complete run. Split out from `main` so a repeat or a sweep can call it many
+/// times; everything it needs comes from `args` and `seed`.
+fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     let steps: usize = args.get("steps", 300_000);
     let baseline_steps: usize = args.get("baseline-steps", 30_000);
-    let seed: u64 = args.get("seed", 12345);
     let every: usize = args.get("every", 50_000);
     let quiet = args.flag("quiet");
 
     let mut rng = seed_everything(seed);
+
+    // Config must be recorded before the first sample, which writes the run header.
+    rec.config("steps", steps);
+    rec.config("baseline_steps", baseline_steps);
 
     // --- Random baseline ---
     //
@@ -52,40 +60,8 @@ fn main() {
 
     let baseline = run_random(baseline_steps, &mut rng);
 
-    // --- Hierarchy ---
-
-    let io_descs = vec![
-        IoDesc {
-            size: Int3::new(4, 6, SENSOR_RES),
-            // Sensors are observed, never predicted.
-            io_type: IoType::None,
-            num_dendrites_per_cell: 16,
-            up_radius: 6,
-            down_radius: 5,
-            ..Default::default()
-        },
-        IoDesc {
-            size: Int3::new(2, 4, ACTION_RES),
-            io_type: IoType::Action,
-            num_dendrites_per_cell: 16,
-            up_radius: 4,
-            down_radius: 5,
-            ..Default::default()
-        },
-    ];
-
-    let layer_descs = vec![LayerDesc {
-        hidden_size: Int3::new(5, 5, 64),
-        num_dendrites_per_cell: 4,
-        up_radius: 2,
-        recurrent_radius: 0,
-        down_radius: 2,
-        ticks_per_update: 1,
-    }];
-
-    let mut h = Hierarchy::new();
-    h.init_random(&io_descs, &layer_descs);
-    h.params.ios[1].importance = 0.0;
+    // Built in `support/env/runner.rs` so a sweep drives the same configuration.
+    let mut h = build_hierarchy();
 
     let mut world = RunnerWorld::new();
 
@@ -163,14 +139,24 @@ fn main() {
             world.reset();
         }
 
-        if !quiet && every > 0 && (t + 1) % every == 0 {
-            println!(
-                "  step {:>8} / {steps} | mean velocity {:>6.2} m/s | furthest this window {:>6.2} m | {:>5.1} resets per 1000",
-                t + 1,
-                velocity.ema(),
-                window_furthest,
-                window_resets as f64 * 1000.0 / every as f64,
+        if every > 0 && (t + 1) % every == 0 {
+            rec.sample(
+                t as u64 + 1,
+                &[
+                    ("mean_velocity", velocity.ema() as f64),
+                    ("window_furthest", window_furthest as f64),
+                    ("resets_per_1000", window_resets as f64 * 1000.0 / every as f64),
+                ],
             );
+            if !quiet {
+                println!(
+                    "  step {:>8} / {steps} | mean velocity {:>6.2} m/s | furthest this window {:>6.2} m | {:>5.1} resets per 1000",
+                    t + 1,
+                    velocity.ema(),
+                    window_furthest,
+                    window_resets as f64 * 1000.0 / every as f64,
+                );
+            }
             window_resets = 0;
             window_furthest = 0.0;
         }
@@ -207,17 +193,38 @@ fn main() {
     let travels = furthest > baseline.furthest * 1.5;
     let engages = stall_fraction < baseline.stall_fraction.max(0.05);
 
+    let mut summary = Summary::new();
+    summary.push("furthest", furthest as f64);
+    summary.push("baseline_furthest", baseline.furthest as f64);
+    summary.push("mean_velocity", velocity.mean() as f64);
+    summary.push("resets_per_1000", resets_per_1000);
+    summary.push("baseline_resets_per_1000", baseline.resets_per_1000);
+    summary.push("stall_fraction", stall_fraction);
+    summary.push("baseline_stall_fraction", baseline.stall_fraction);
+    summary.push("flipped", flipped as f64);
+    summary.push("hit_hurdle", hit_wall as f64);
+    summary.push(
+        "furthest_vs_random",
+        if baseline.furthest > 0.0 { (furthest / baseline.furthest) as f64 } else { f64::NAN },
+    );
+
     if travels && engages {
         println!(
             "\nLearned: travelling several times further than a flailing body, and reaching hurdles\nrather than stalling in place."
         );
+        summary.verdict(true, "travelling far further than a flailing body, and reaching hurdles");
     } else if travels {
         println!("\nPartly learned: covering more ground than random flailing, but still stalling often.");
+        summary.verdict(false, "covering more ground than random, but still stalling often");
     } else {
         println!(
             "\nNot converged: no further than random flailing. This is by far the hardest problem in\nthe suite — a gait has to be discovered from a sparse velocity signal across eight\ncoupled motors — so expect it to need far more --steps than the other demos."
         );
+        summary.verdict(false, "no further than random flailing");
     }
+
+    rec.finish_summary(&summary);
+    summary
 }
 
 /// What a flailing body achieves: furthest travel, resets per 1000 steps, and the

@@ -7,8 +7,35 @@
 // reproducible from `--seed`. See `doc/Demos.md`.
 
 use crate::support::rng::Rng;
+use dcc_sph::encoder::Encoder;
+use dcc_sph::helpers::{Int3, VisibleLayerDesc};
 
 const PI: f32 = std::f32::consts::PI;
+
+/// The bare `Encoder` that `enc_vis` probes.
+///
+/// One visible layer of 1x2 columns: column 0 carries x, column 1 carries y. The
+/// default radius of 2 means each hidden column's receptive field covers both, so
+/// every cell sees a full (x, y) pair.
+pub fn build_enc_vis_encoder(columns: i32, cells: i32, resolution: i32) -> Encoder {
+    let mut e = Encoder::default();
+    e.init_random(
+        Int3::new(1, columns, cells),
+        vec![VisibleLayerDesc { size: Int3::new(1, 2, resolution), radius: 2 }],
+    );
+    e
+}
+
+/// The bare `Encoder` that `topo_test` probes. Upstream: hidden 4x4x16 over a
+/// 1x2x64 visible layer.
+pub fn build_topo_encoder(hidden: Int3, resolution: i32) -> Encoder {
+    let mut e = Encoder::default();
+    e.init_random(
+        hidden,
+        vec![VisibleLayerDesc { size: Int3::new(1, 2, resolution), radius: 2 }],
+    );
+    e
+}
 
 /// Sample `num_clusters` affine-transformed Gaussian blobs, `points_per_cluster`
 /// points each, returned with the cluster index alongside each point.

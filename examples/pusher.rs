@@ -18,27 +18,32 @@
 //   cargo run --release --example pusher
 //   cargo run --release --example pusher -- --steps 500000
 
-use dcc_sph::helpers::Int3;
-use dcc_sph::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
 
 #[path = "support/mod.rs"]
 mod support;
 
 use support::args::Args;
 use support::encode::bin_unit;
-use support::env::pusher::{Outcome, PusherWorld};
+use support::env::pusher::{build_hierarchy, Outcome, PusherWorld, ACTION_RES, SENSOR_RES};
 use support::report::Rolling;
+use support::metrics::{Recorder, Summary};
 use support::rng::{seed_everything, Rng};
-
-const SENSOR_RES: i32 = 16;
-const ACTION_RES: i32 = 5;
 
 fn main() {
     let args = Args::parse();
+    let seed: u64 = args.get("seed", 12345);
+
+    let mut rec = Recorder::from_args("pusher", &args);
+    run(&args, seed, &mut rec);
+    rec.finish();
+}
+
+/// One complete run. Split out from `main` so a repeat or a sweep can call it many
+/// times; everything it needs comes from `args` and `seed`.
+fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     let steps: usize = args.get("steps", 300_000);
     let baseline_steps: usize = args.get("baseline-steps", 50_000);
-    let seed: u64 = args.get("seed", 12345);
     let every: usize = args.get("every", 50_000);
     // Upstream has an exploration hook wired up but leaves it at 0, relying on the
     // actor's own stochastic policy. Same default here.
@@ -53,6 +58,12 @@ fn main() {
 
     let mut rng = seed_everything(seed);
 
+    // Config must be recorded before the first sample, which is what writes the
+    // run header.
+    rec.config("steps", steps);
+    rec.config("timeout", timeout);
+    rec.config("exploration", exploration);
+
     // --- Random baseline ---
     //
     // Goals reached per 100k steps means nothing on its own: the object respawns
@@ -61,44 +72,8 @@ fn main() {
 
     let baseline = run_random(baseline_steps, timeout, &mut rng);
 
-    // --- Hierarchy ---
-
-    let io_descs = vec![
-        IoDesc {
-            size: Int3::new(2, 2, SENSOR_RES),
-            io_type: IoType::Prediction,
-            num_dendrites_per_cell: 16,
-            up_radius: 2,
-            down_radius: 3,
-            ..Default::default()
-        },
-        IoDesc {
-            size: Int3::new(1, 2, ACTION_RES),
-            io_type: IoType::Action,
-            num_dendrites_per_cell: 16,
-            // Radius 0 — a 1x1 receptive field. The action port is two columns
-            // wide and there is nothing next to them worth seeing.
-            up_radius: 0,
-            down_radius: 3,
-            ..Default::default()
-        },
-    ];
-
-    let layer_descs = vec![LayerDesc {
-        hidden_size: Int3::new(7, 7, 32),
-        num_dendrites_per_cell: 4,
-        up_radius: 2,
-        recurrent_radius: 0,
-        down_radius: 2,
-        ticks_per_update: 1,
-    }];
-
-    let mut h = Hierarchy::new();
-    h.init_random(&io_descs, &layer_descs);
-    // Keep the action port out of the encoder's input entirely: the observation
-    // alone should determine the state, and echoing the action back into it only
-    // adds a shortcut.
-    h.params.ios[1].importance = 0.0;
+    // Built in `support/env/pusher.rs` so a sweep drives the same configuration.
+    let mut h = build_hierarchy();
 
     let mut world = PusherWorld::new();
     world.timeout = timeout;
@@ -155,15 +130,25 @@ fn main() {
 
         reward_ema.push(reward);
 
-        if !quiet && every > 0 && (t + 1) % every == 0 {
+        if every > 0 && (t + 1) % every == 0 {
             let per100k = 100_000.0 / every as f64;
-            println!(
-                "  step {:>8} / {steps} | reward EMA {:>8.4} | per 100k: {:.1} goals, {:.1} lost",
-                t + 1,
-                reward_ema.ema(),
-                window_goals as f64 * per100k,
-                window_losses as f64 * per100k,
+            rec.sample(
+                t as u64 + 1,
+                &[
+                    ("reward_ema", reward_ema.ema() as f64),
+                    ("goals_per_100k", window_goals as f64 * per100k),
+                    ("losses_per_100k", window_losses as f64 * per100k),
+                ],
             );
+            if !quiet {
+                println!(
+                    "  step {:>8} / {steps} | reward EMA {:>8.4} | per 100k: {:.1} goals, {:.1} lost",
+                    t + 1,
+                    reward_ema.ema(),
+                    window_goals as f64 * per100k,
+                    window_losses as f64 * per100k,
+                );
+            }
             window_goals = 0;
             window_losses = 0;
         }
@@ -185,16 +170,34 @@ fn main() {
         baseline.0, baseline.1
     );
 
+    let mut summary = Summary::new();
+    summary.push("goals_per_100k", goals_per_100k);
+    summary.push("losses_per_100k", losses_per_100k);
+    summary.push("baseline_goals_per_100k", baseline.0);
+    summary.push("baseline_losses_per_100k", baseline.1);
+    summary.push("reward_ema", reward_ema.ema() as f64);
+    // The ratio is what a sweep should compare: absolute goal counts move with
+    // --steps, but "how many times better than random" does not.
+    summary.push(
+        "goals_vs_random",
+        if baseline.0 > 0.0 { goals_per_100k / baseline.0 } else { f64::NAN },
+    );
+
     if goals_per_100k > baseline.0 * 1.5 {
         println!(
             "\nLearned: reaching the goal far more often than random action does ({goals_per_100k:.1} vs {:.1} per 100k).",
             baseline.0
         );
+        summary.verdict(true, "reaching the goal far more often than random action");
     } else {
         println!(
             "\nNot converged: no clear improvement on the random baseline — try more --steps."
         );
+        summary.verdict(false, "no clear improvement on the random baseline");
     }
+
+    rec.finish_summary(&summary);
+    summary
 }
 
 /// Run the world under uniformly random actions and return goals and losses per

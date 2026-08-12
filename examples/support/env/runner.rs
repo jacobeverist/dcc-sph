@@ -8,7 +8,53 @@
 //
 // Every constant below is transcribed from upstream.
 
+use dcc_sph::helpers::Int3;
+use dcc_sph::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
 use rapier2d::prelude::*;
+
+pub const SENSOR_RES: i32 = 21;
+pub const ACTION_RES: i32 = 11;
+/// 4x6 columns for 23 sensors; the last stays at zero, as upstream leaves it.
+pub const SENSOR_COLUMNS: usize = 24;
+
+/// The hierarchy `runner` uses.
+///
+/// The observation port is `IoType::None` — sensors are observed, never predicted —
+/// and the action port is kept out of the encoder's input with `importance = 0.0`.
+pub fn build_hierarchy() -> Hierarchy {
+    let io_descs = vec![
+        IoDesc {
+            size: Int3::new(4, 6, SENSOR_RES),
+            io_type: IoType::None,
+            num_dendrites_per_cell: 16,
+            up_radius: 6,
+            down_radius: 5,
+            ..Default::default()
+        },
+        IoDesc {
+            size: Int3::new(2, 4, ACTION_RES),
+            io_type: IoType::Action,
+            num_dendrites_per_cell: 16,
+            up_radius: 4,
+            down_radius: 5,
+            ..Default::default()
+        },
+    ];
+
+    let layer_descs = vec![LayerDesc {
+        hidden_size: Int3::new(5, 5, 64),
+        num_dendrites_per_cell: 4,
+        up_radius: 2,
+        recurrent_radius: 0,
+        down_radius: 2,
+        ticks_per_update: 1,
+    }];
+
+    let mut h = Hierarchy::new();
+    h.init_random(&io_descs, &layer_descs);
+    h.params.ios[1].importance = 0.0;
+    h
+}
 
 pub const NUM_SEGMENTS: usize = 8;
 pub const NUM_WHISKERS: usize = 6;

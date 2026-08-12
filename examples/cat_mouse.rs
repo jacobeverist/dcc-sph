@@ -27,6 +27,7 @@ use support::env::catmouse::{
     build_hierarchy, CatMouseEnv, Map, ACTION_RES, ACTION_SIZE, OBS_RES, OBS_SIZE,
 };
 use support::report::{sparkline, Rolling};
+use support::metrics::{Recorder, Summary};
 use support::rng::{seed_everything, Rng};
 
 /// Physics runs at 120 Hz, control and learning at 30 Hz — four physics substeps
@@ -36,11 +37,20 @@ const DT: f32 = 1.0 / 120.0;
 
 fn main() {
     let args = Args::parse();
+    let seed: u64 = args.get("seed", 12345);
+
+    let mut rec = Recorder::from_args("cat_mouse", &args);
+    run(&args, seed, &mut rec);
+    rec.finish();
+}
+
+/// One complete run. Split out from `main` so a repeat or a sweep can call it many
+/// times; everything it needs comes from `args` and `seed`.
+fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
 
     // Counted in AI steps (decisions), not physics substeps.
     let steps: usize = args.get("steps", 200_000);
     let baseline_steps: usize = args.get("baseline-steps", 20_000);
-    let seed: u64 = args.get("seed", 12345);
     let every: usize = args.get("every", 25_000);
     // A 5x5 cell maze is 11x11 tiles. Bigger mazes look better but make capture so
     // rare that nothing is measurable: at 8x8 a random cat catches the mouse in
@@ -55,6 +65,12 @@ fn main() {
     let quiet = args.flag("quiet");
 
     let mut rng = seed_everything(seed);
+
+    // Config must be recorded before the first sample, which writes the run header.
+    rec.config("steps", steps);
+    rec.config("cells", cells);
+    rec.config("braid", braid);
+    rec.config("timeout", timeout);
 
     let map = Map::generate(cells, cells, braid, &mut rng);
     let (map_w, map_h) = (map.w, map.h);
@@ -156,8 +172,20 @@ fn main() {
             env.reset(&mut rng);
         }
 
-        if !quiet && every > 0 && (t + 1) % every == 0 {
+        if every > 0 && (t + 1) % every == 0 {
             trend.push(time_to_capture.mean());
+            rec.sample(
+                t as u64 + 1,
+                &[
+                    ("capture_rate", capture_rate.mean() as f64),
+                    ("steps_to_capture", time_to_capture.mean() as f64),
+                    ("mean_separation", separation.mean() as f64),
+                    ("captures", captures as f64),
+                ],
+            );
+            if quiet {
+                continue;
+            }
             println!(
                 "  step {:>8} / {steps} | captures {captures:>5} | capture rate {:>5.1}% | mean steps to capture {:>6.0} | mean separation {:.1}",
                 t + 1,
@@ -194,13 +222,29 @@ fn main() {
         );
     }
 
+    let mut summary = Summary::new();
+    summary.push("capture_rate", capture_rate.mean() as f64);
+    summary.push("baseline_capture_rate", baseline.0 as f64);
+    summary.push("steps_to_capture", time_to_capture.mean() as f64);
+    summary.push("baseline_steps_to_capture", baseline.1 as f64);
+    summary.push("mean_separation", separation.mean() as f64);
+    summary.push("captures", captures as f64);
+    summary.push("episodes", episodes as f64);
+
     if capture_rate.mean() > baseline.0 * 1.2 {
         println!("\nThe cat is ahead: it catches the mouse more often than random movement does.");
+        summary.verdict(true, "the cat is ahead of random movement");
     } else if capture_rate.mean() < baseline.0 * 0.8 {
         println!("\nThe mouse is ahead: it evades better than random movement does.");
+        // Not a failure: in a zero-sum chase, either side pulling ahead is a result.
+        summary.verdict(true, "the mouse is ahead of random movement");
     } else {
         println!("\nEvenly matched so far, or neither has learned much — try more --steps.");
+        summary.verdict(false, "evenly matched, or neither has learned much");
     }
+
+    rec.finish_summary(&summary);
+    summary
 }
 
 /// Capture rate and mean steps-to-capture under uniformly random actions.

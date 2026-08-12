@@ -13,6 +13,37 @@ cargo run --release --example wavy_line -- --steps 40000 --ahead 8
 
 Every demo takes `--steps` (or `--episodes`), `--seed`, `--every` (report interval) and `--quiet`. `--seed` fully determines a run: it seeds both the library's global RNG and the demo's own environment stream (`examples/support/rng.rs`).
 
+## Getting the numbers out
+
+`--metrics <path>` writes machine-readable records alongside the usual text. Stdout is unchanged — this is strictly additive, and `--quiet` still governs printing only.
+
+```bash
+cargo run --release --example pusher -- --steps 300000 --metrics run.jsonl
+```
+
+JSONL is the default: one self-describing object per line, so a consumer can tail it without knowing which demo produced it.
+
+```
+{"kind":"run","demo":"pusher","seed":12345,"run":0,"config":{"exploration":0.05,"steps":300000,"timeout":500}}
+{"kind":"sample","demo":"pusher","seed":12345,"run":0,"step":50000,"metrics":{"reward_ema":0.021,"goals_per_100k":24.0}}
+{"kind":"summary","demo":"pusher","seed":12345,"run":0,"metrics":{"goals_per_100k":16.0,"baseline_goals_per_100k":2.0,"goals_vs_random":8.0}}
+{"kind":"verdict","demo":"pusher","seed":12345,"run":0,"learned":true,"note":"reaching the goal far more often than random action"}
+```
+
+Every record carries `demo`, `seed` and `run`, so files from different demos or different seeds can be concatenated and still make sense. `--metrics-format csv` emits long format instead — `demo,seed,run,kind,step,metric,value`, one row per number.
+
+Two properties CI checks, because everything else rests on them: the file parses, and **the same seed produces byte-identical metrics**. Non-finite values are written as `null` rather than `NaN`, so a file always parses even when a metric is undefined.
+
+Where a demo reports a baseline it also records the ratio (`goals_vs_random`, `furthest_vs_random`). That is the figure worth comparing across runs — absolute counts move with `--steps`, but "how many times better than random" does not.
+
+Without `--metrics` the recorder is inert: no file, no buffer, and the call returns before touching its arguments.
+
+## Driving a demo programmatically
+
+Each demo's hierarchy lives in its environment module — `env::pusher::build_hierarchy()`, `env::ball::build()`, `env::wavy::build_line_hierarchy()`, and so on — rather than inline in `main`. The windowed viewer and the headless demo therefore cannot drift apart, and a caller can construct exactly the configuration a demo uses.
+
+Each demo is also split into `run(args, seed, rec) -> Summary` and a `main` that drives it once. `Summary` is a list of named metrics plus the verdict, so a caller can aggregate across runs without knowing what any particular demo measures.
+
 | Demo | Upstream source | What it exercises |
 |---|---|---|
 | `wavy_line` | `demos/Wavy_Line.cpp` | Sequence prediction; `write_state`/`read_state` round trip |
@@ -127,12 +158,12 @@ More training cannot change this. `Encoder` has **no topology-forming mechanism*
 
 | Upstream | Why |
 |---|---|
-| `Video_Prediction`, `Loop_Mapper`, `Loop_Counter`, `Single_Lap_Mapper`, `VSA_Tests_Video`, `TrackSOM`, `Car_Tracker`, `Donkey_Playback`, `FP_Playback`, `SDC_Controller_Test` | Need OpenCV video decoding |
-| `Fluid` | Only loads pretrained `.oenc`/`.ohr` weights, which are not in the repository |
-| `Image_Encoder_Test` | Uses a DCT-based `Image_Encoder` (`get_dct_bases()`, `encode()`) that `src/image_encoder.rs` does not implement |
-| `Ball_Physics_Vec`, `VSA_Char` | Use `Int2` hidden sizes and a 4-argument `IO_Desc` from a *newer* AOgmaNeo than the `Int3` API this crate ports from `645a54a` |
-| `Cat_Mouse_Pos`, `Explore`, `Stacking_RL`, `Stacking_Prog`, `C_Test`, `VSA_Char_Single`, `VSA_Tests_Comp`, `Wavy_Classify_Old` | Variants of demos already covered, or superseded |
-| ~40 others (`ARTTest`, `ART_Visualizer`, `Basic`, `Evo`, `STDP`, `SOMGridCells`, `Topo_Test`, `VSA_Tests*`, `Generative`, `Marcher`, `TEM`, `Swarm_*`, `Stacking`, `Car_Racing_RL`, `Reacher`, `NaviGraph`, …) | Include no `aogmaneo/` headers at all — standalone research sketches sharing the repository |
+| `Loop_Counter`, `Loop_Mapper`, `Single_Lap_Mapper`, `TrackSOM`, `Car_Tracker`, `Donkey_Playback`, `FP_Playback`, `SDC_Controller_Test` | **Blocked on missing data, not on code.** They need `resources/data/video0.avi`, `resources/video0.avi`, `resources/singlelap.avi` and matching `control0.txt` / `racevit_controls.txt` throttle-and-steer logs. None of those files exists on *any* branch of the upstream repository — `Bullfinch192.mp4` and `Tesseract.wmv` are the only video files that were ever committed. `Single_Lap_Mapper` and `TrackSOM` also link no `aogmaneo/` header at all. |
+| `Fluid` | Pure inference from pretrained `resources/fluidsim.oenc` / `.ohr`, which exist on no branch, and the file contains no training loop to regenerate them. It also feeds the image encoder `F32_Array` float pixels, which neither this crate nor upstream `master` accepts. Permanently blocked. |
+| `Image_Encoder_Test` | Uses a **DCT-based** `Image_Encoder` (`init(Int2)`, `get_dct_size()`, `get_dct_bases()`, `get_encoding_size()`, `encode()`, `get_encoded_cis()`). This is not something that could be ported: all 404 branches of `ogmacorp/AOgmaNeo` were searched, plus `CLOgmaNeo`, `EOgmaNeo`, `OgmaNeo2`, `PyAOgmaNeo` and `TiOgmaNeo`, and there are **zero** occurrences of `dct`, `get_encoded_cis` or `get_encoding_size` anywhere. The demo targets an unpublished working copy. Writing it would be invention rather than porting — the coefficient-to-column-index quantiser is a free design parameter with no reference to validate against — and it would unlock one demo whose payoff is `ball_physics` with a fixed transform instead of a learned SOM. |
+| `Ball_Physics_Vec`, `VSA_Char`, `VSA_Tests_Comp` | Use a templated `Hierarchy<S, L>` over **hypervectors**, with `Int2` hidden sizes and `get_prediction_vecs()`. This is a *different algorithm*, not a newer version of this one: upstream `master`'s `IO_Desc` is field-for-field identical to this crate's `IoDesc` (same eight fields, same defaults) and its `step` signature matches too — the only mainline drift since `645a54a` is `Params::anticipation` and `Layer_Desc::num_dendrites_per_cell`, both of which this crate already has. The `Int2` API lives in the **`SVECTOR` branch family** (20 of the 404 branches), roughly 63 KB of headers implementing a second learner, and the exact revision these two demos want is unpublished even there. |
+| `C_Test`, `Wavy_Classify_Old`, `Cat_Mouse_Torch`, `Pusher_Goal` | Variants or earlier drafts of demos already covered. `C_Test` is additionally broken as checked in: `num_dendrites_per_cell = 0` on two ports, and a four-entry direction table turned with `% 3`, so one direction is unreachable and turning is asymmetric. |
+| ~40 others (`ARTTest`, `ART_Visualizer`, `Basic`, `Basic2`, `Evo`, `STDP`, `SOMGridCells`, `Topo_Test`, `VSA_Tests*`, `Generative`, `Marcher`, `TEM`, `Swarm_*`, `Stacking`, `Stacking_BP`, `Car_Racing_RL`, `Reacher`, `NaviGraph`, …) | Include no `aogmaneo/` headers at all — standalone research sketches sharing the repository. Note in particular that **none of the MNIST demos uses AOgmaNeo**: `ART_Visualizer`, `Basic`, `Basic2`, `Generative` and `NaviGraph` are a hand-written ART implementation, a diffusion sketch and a grid-cell graph. An MNIST loader would let this repository run someone else's algorithms, not `dcc_sph`. |
 
 Of the 69 top-level demos upstream, 27 link AOgmaNeo.
 

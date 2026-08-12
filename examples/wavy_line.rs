@@ -16,29 +16,35 @@
 //   cargo run --release --example wavy_line
 //   cargo run --release --example wavy_line -- --steps 40000 --ahead 8 --noise 0.01
 
-use dcc_sph::helpers::{Int3, SliceReader, StreamReader, StreamWriter, VecWriter};
-use dcc_sph::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
+use dcc_sph::helpers::{SliceReader, StreamReader, StreamWriter, VecWriter};
 
 #[path = "support/mod.rs"]
 mod support;
 
 use support::args::Args;
 use support::encode::{bin_range, unbin_range};
-use support::env::wavy::{WavyLine, LINE_MAX, LINE_MIN};
+use support::env::wavy::{
+    build_line_hierarchy, WavyLine, LINE_COLUMN_SIZE as COLUMN_SIZE, LINE_MAX, LINE_MIN,
+};
+use support::metrics::{Recorder, Summary};
 use support::report::{sparkline, Rolling};
 use support::rng::seed_everything;
 
-/// Cells per input column. Upstream's `inputColumnSize` under
-/// `USE_SIMPLE_FLOAT_ENCODER_`, which is the branch that actually compiles.
-const COLUMN_SIZE: i32 = 64;
-
 fn main() {
     let args = Args::parse();
+    let seed: u64 = args.get("seed", 12345);
 
+    let mut rec = Recorder::from_args("wavy_line", &args);
+    run(&args, seed, &mut rec);
+    rec.finish();
+}
+
+/// One complete run. Split out from `main` so a repeat or a sweep can call it many
+/// times; everything it needs comes from `args` and `seed`.
+fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary {
     let steps: usize = args.get("steps", 20_000);
     let ahead: usize = args.get("ahead", 5);
     let num_inputs: usize = args.get("inputs", 2);
-    let seed: u64 = args.get("seed", 12345);
     let every: usize = args.get("every", 2_000);
     let noise: f32 = args.get("noise", 0.0);
     let quiet = args.flag("quiet");
@@ -51,35 +57,14 @@ fn main() {
 
     let mut rng = seed_everything(seed);
 
-    // --- Hierarchy ---
-    //
-    // Upstream: one layer of 5x5x32, one prediction IO per signal, each a single
-    // column of 64 cells. `ticks_per_update: 1` keeps this crate's tick-gating
-    // addition out of the way so the behaviour matches upstream, which has no
-    // such mechanism (see doc/Divergences.md).
+    rec.config("steps", steps);
+    rec.config("ahead", ahead);
+    rec.config("inputs", num_inputs);
+    rec.config("noise", noise);
 
-    let io_descs: Vec<IoDesc> = (0..num_inputs)
-        .map(|_| IoDesc {
-            size: Int3::new(1, 1, COLUMN_SIZE),
-            io_type: IoType::Prediction,
-            num_dendrites_per_cell: 4,
-            up_radius: 2,
-            down_radius: 2,
-            ..Default::default()
-        })
-        .collect();
-
-    let layer_descs = vec![LayerDesc {
-        hidden_size: Int3::new(5, 5, 32),
-        num_dendrites_per_cell: 4,
-        up_radius: 2,
-        recurrent_radius: 0,
-        down_radius: 2,
-        ticks_per_update: 1,
-    }];
-
-    let mut h = Hierarchy::new();
-    h.init_random(&io_descs, &layer_descs);
+    // The hierarchy lives in `support/env/wavy.rs` so a sweep or the viewer drives
+    // exactly this configuration.
+    let mut h = build_line_hierarchy(num_inputs);
 
     let mut env = WavyLine::new(num_inputs);
     env.noise = noise;
@@ -200,19 +185,32 @@ fn main() {
 
         // --- Periodic report ---
 
-        if !quiet && every > 0 && (t + 1) % every == 0 {
-            println!(
-                "step {:>7} | MAE 1-step {:.4} (persist {:.4})  {}-step {:.4} (persist {:.4}) | jumps {}",
-                t + 1,
-                mae_1.mean(),
-                mae_persist_1.mean(),
-                ahead,
-                mae_n.mean(),
-                mae_persist_n.mean(),
-                env.jumps(),
+        if every > 0 && (t + 1) % every == 0 {
+            rec.sample(
+                t as u64 + 1,
+                &[
+                    ("mae_1", mae_1.mean() as f64),
+                    ("mae_persist_1", mae_persist_1.mean() as f64),
+                    ("mae_n", mae_n.mean() as f64),
+                    ("mae_persist_n", mae_persist_n.mean() as f64),
+                    ("jumps", env.jumps() as f64),
+                ],
             );
-            println!("  signal 0 actual    {}", sparkline(&trace_actual.as_slice()));
-            println!("  signal 0 predicted {}", sparkline(&trace_pred.as_slice()));
+
+            if !quiet {
+                println!(
+                    "step {:>7} | MAE 1-step {:.4} (persist {:.4})  {}-step {:.4} (persist {:.4}) | jumps {}",
+                    t + 1,
+                    mae_1.mean(),
+                    mae_persist_1.mean(),
+                    ahead,
+                    mae_n.mean(),
+                    mae_persist_n.mean(),
+                    env.jumps(),
+                );
+                println!("  signal 0 actual    {}", sparkline(&trace_actual.as_slice()));
+                println!("  signal 0 predicted {}", sparkline(&trace_pred.as_slice()));
+            }
         }
     }
 
@@ -256,23 +254,41 @@ fn main() {
 
     // Judge on the N-step horizon: that is where a temporal model has to actually
     // model the signal rather than lean on smoothness.
+    let mut summary = Summary::new();
+    summary.push("mae_1", mae_1.mean() as f64);
+    summary.push("mae_persist_1", mae_persist_1.mean() as f64);
+    summary.push("mae_n", mae_n.mean() as f64);
+    summary.push("mae_persist_n", mae_persist_n.mean() as f64);
+    summary.push("encoder_limit", (bin_width * 0.25) as f64);
+    summary.push("state_mismatches", state_mismatches as f64);
+    summary.push("jumps", env.jumps() as f64);
+
     if ahead > 1 {
         if mae_n.mean() < mae_persist_n.mean() {
-            println!(
-                "\nLearned: the {ahead}-step prediction beats {ahead}-step persistence ({:.4} < {:.4}).",
+            let note = format!(
+                "the {ahead}-step prediction beats {ahead}-step persistence ({:.4} < {:.4})",
                 mae_n.mean(),
                 mae_persist_n.mean()
             );
+            println!("\nLearned: {note}.");
+            summary.verdict(true, note);
         } else {
-            println!(
-                "\nNot converged: the {ahead}-step prediction has not beaten persistence yet — try more --steps."
+            let note = format!(
+                "the {ahead}-step prediction has not beaten persistence yet — try more --steps"
             );
+            println!("\nNot converged: {note}.");
+            summary.verdict(false, note);
         }
     } else if mae_1.mean() < mae_persist_1.mean() {
         println!("\nLearned: the 1-step prediction beats 1-step persistence.");
+        summary.verdict(true, "the 1-step prediction beats 1-step persistence");
     } else {
         println!("\nNot converged: try more --steps, or --ahead > 1 for a less trivial baseline.");
+        summary.verdict(false, "try more --steps, or --ahead > 1");
     }
+
+    rec.finish_summary(&summary);
+    summary
 }
 
 fn decode(ci: i32) -> f32 {

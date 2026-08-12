@@ -6,8 +6,92 @@
 // changing them changes how hard the prediction problem is.
 
 use crate::support::rng::Rng;
+use dcc_sph::helpers::Int3;
+use dcc_sph::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
 
 const PI: f32 = std::f32::consts::PI;
+
+/// Cells per `wavy_line` input column. Upstream's `inputColumnSize` under
+/// `USE_SIMPLE_FLOAT_ENCODER_`, which is the branch that actually compiles.
+pub const LINE_COLUMN_SIZE: i32 = 64;
+
+/// Cells per `wavy_classify` signal column. Upstream's `inputColumnSize`.
+pub const CLASS_COLUMN_SIZE: i32 = 32;
+
+/// The hierarchy `wavy_line` uses: one layer of 5x5x32, one Prediction port per
+/// signal, each a single column of 64 cells.
+///
+/// `ticks_per_update: 1` keeps this crate's tick-gating addition out of the way so
+/// the behaviour matches upstream, which has no such mechanism (see
+/// `doc/Divergences.md`).
+///
+/// Defined here rather than in the demo so a sweep, a checkpoint round trip or the
+/// viewer all drive exactly the same configuration; a second copy would drift.
+pub fn build_line_hierarchy(num_inputs: usize) -> Hierarchy {
+    let io_descs: Vec<IoDesc> = (0..num_inputs)
+        .map(|_| IoDesc {
+            size: Int3::new(1, 1, LINE_COLUMN_SIZE),
+            io_type: IoType::Prediction,
+            num_dendrites_per_cell: 4,
+            up_radius: 2,
+            down_radius: 2,
+            ..Default::default()
+        })
+        .collect();
+
+    let layer_descs = vec![LayerDesc {
+        hidden_size: Int3::new(5, 5, 32),
+        num_dendrites_per_cell: 4,
+        up_radius: 2,
+        recurrent_radius: 0,
+        down_radius: 2,
+        ticks_per_update: 1,
+    }];
+
+    let mut h = Hierarchy::new();
+    h.init_random(&io_descs, &layer_descs);
+    h
+}
+
+/// The hierarchy `wavy_classify` uses: a signal port and a label port, over a stack
+/// where layer `l` updates once every `2^l` bottom-layer steps.
+///
+/// Two choices here are load-bearing and are argued in `doc/Demos.md`: the
+/// exponential tick stack (a flat stack sits at chance however long it trains,
+/// because telling these classes apart means measuring frequency over tens of
+/// samples), and `label_importance` defaulting to 0.0 rather than upstream's 0.1
+/// (at 0.1 the true label reaches the hidden state and the decoder learns the
+/// identity instead of classifying).
+pub fn build_classify_hierarchy(num_layers: usize, label_importance: f32) -> Hierarchy {
+    let io_descs = vec![
+        IoDesc {
+            size: Int3::new(1, 1, CLASS_COLUMN_SIZE),
+            io_type: IoType::Prediction,
+            ..Default::default()
+        },
+        IoDesc {
+            size: Int3::new(1, 1, NUM_CLASSES as i32),
+            io_type: IoType::Prediction,
+            ..Default::default()
+        },
+    ];
+
+    let layer_descs: Vec<LayerDesc> = (0..num_layers)
+        .map(|l| LayerDesc {
+            hidden_size: Int3::new(5, 5, 64),
+            num_dendrites_per_cell: 4,
+            up_radius: 2,
+            recurrent_radius: 0,
+            down_radius: 2,
+            ticks_per_update: 1usize << l,
+        })
+        .collect();
+
+    let mut h = Hierarchy::new();
+    h.init_random(&io_descs, &layer_descs);
+    h.params.ios[1].importance = label_importance;
+    h
+}
 
 // --- Wavy_Line ---
 

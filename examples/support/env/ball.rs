@@ -15,6 +15,9 @@
 // so the ball's centre is confined to x in [-6.1, 6.1] and y >= 1.4.
 
 use crate::support::rng::Rng;
+use dcc_sph::helpers::{Int3, VisibleLayerDesc};
+use dcc_sph::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
+use dcc_sph::image_encoder::ImageEncoder;
 
 pub const FRAME_W: usize = 64;
 pub const FRAME_H: usize = 64;
@@ -155,6 +158,47 @@ impl Default for BallWorld {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The `ImageEncoder` and `Hierarchy` that `ball_physics` uses.
+///
+/// Both are returned together because the hierarchy's IO port is sized to the
+/// encoder's hidden layer, so the two configurations cannot be chosen apart.
+///
+/// Upstream: encoder hidden 20x20x16 over one 64x64x1 visible layer at radius 6;
+/// hierarchy 2 layers of 10x10x32 with `up_radius: 4` — a radius-2 field would see
+/// too little of a 20x20 CSDR per column.
+pub fn build() -> (ImageEncoder, Hierarchy) {
+    let enc_hidden = Int3::new(20, 20, 16);
+
+    let mut enc = ImageEncoder::default();
+    enc.init_random(
+        enc_hidden,
+        vec![VisibleLayerDesc { size: Int3::new(FRAME_W as i32, FRAME_H as i32, 1), radius: 6 }],
+    );
+
+    let io_descs = vec![IoDesc {
+        size: enc_hidden,
+        io_type: IoType::Prediction,
+        up_radius: 4,
+        ..Default::default()
+    }];
+
+    let layer_descs: Vec<LayerDesc> = (0..2)
+        .map(|_| LayerDesc {
+            hidden_size: Int3::new(10, 10, 32),
+            num_dendrites_per_cell: 4,
+            up_radius: 2,
+            recurrent_radius: 0,
+            down_radius: 2,
+            ticks_per_update: 1,
+        })
+        .collect();
+
+    let mut h = Hierarchy::new();
+    h.init_random(&io_descs, &layer_descs);
+
+    (enc, h)
 }
 
 /// World coordinates at the centre of output pixel `(px, py)`.
