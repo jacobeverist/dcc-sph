@@ -189,13 +189,18 @@ jobs:
           echo
           echo "OK: no duplicate core dependencies"
 
-  # Deliberately NOT part of the job above, and deliberately not `--all-features`:
-  # the `gymnasium-examples` feature pulls pyo3 with `auto-initialize`, which needs
-  # Python development headers, and the examples themselves need a venv with
-  # `gymnasium[box2d]`. Checking that the feature still COMPILES is worth doing;
-  # running the examples is not CI's job.
-  gymnasium-feature:
-    name: gymnasium-examples compiles
+  # Deliberately a separate job: `examples-gym` pulls pyo3 with `auto-initialize`, which
+  # needs Python development headers, and the runners themselves need a venv with
+  # `gymnasium[box2d]`. Checking they still COMPILE is worth doing; running them is not
+  # CI's job.
+  #
+  # This used to be `cargo check --examples --features gymnasium-examples`, back when the
+  # runners lived in the library's own `examples/` behind an optional `pyo3` dependency.
+  # They are a separate workspace member now (R11/R16) so that pyo3 is absent from the
+  # library entirely — which is why the job above builds and tests the library WITHOUT
+  # ever touching Python, and this one is the only place a Python toolchain is needed.
+  gymnasium-examples:
+    name: examples-gym compiles
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -203,12 +208,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Check the pyo3-gated examples still build
-        run: cargo check --examples --features gymnasium-examples
+      - name: Check the Gymnasium runners still build
+        run: cargo check -p dcc_sph_gym_examples --examples
 
   # The windowed viewer lives in `examples-viz/`, a separate workspace member, so
   # macroquad is not a dependency of the library at all — R16 in doc/Conformance.md,
-  # and the same move the Gymnasium runners are making. `default-members` keeps it
+  # the same move the Gymnasium runners have now made. `default-members` keeps it
   # out of the job above, so it needs its own build here.
   #
   # Compiling it is the whole check: opening a window is not CI's job, and a runner

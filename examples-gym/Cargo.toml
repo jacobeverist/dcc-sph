@@ -1,0 +1,25 @@
+[package]
+name = "dcc_sph_gym_examples"
+version = "0.1.0"
+authors = ["Jacob Everist <jacob.everist@gmail.com>"]
+edition = "2021"
+description = "Gymnasium-backed example runners for dcc_sph. Not part of the library."
+license = "CC-BY-NC-SA-4.0"
+
+# Never published, and never a dependency of `dcc_sph`. This crate exists so the
+# Gymnasium runners can have `pyo3` without the LIBRARY having it.
+#
+# Why that matters: `pyo3-ffi` sets `links = "python"`, and cargo permits at most one
+# package with a given `links` value in an entire dependency graph. Two pyo3 majors are
+# therefore *unresolvable*, not merely duplicated. dcc-core's Python binding links the
+# whole engine graph including `dcc_sph`, so while `pyo3` sat in the library's own
+# `[dependencies]` — even optional, even off — the two repositories had to keep pyo3
+# majors in lockstep, and it worked only because they happened to match.
+#
+# As a sibling workspace member that nothing depends on, this crate never enters a
+# consumer's graph at all. See `doc/Conformance.md` (R11, R16).
+publish = false
+
+[dependencies]
+dcc_sph = { path = ".." }
+pyo3 = { version = "0.29", features = ["auto-initialize"] }

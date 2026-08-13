@@ -107,6 +107,8 @@ Start here:
 | --- | --- | --- |
 | **Wave prediction** | `cargo run --release --example wave_prediction` | Wavy-line sequence prediction with ASCII recall output. The "hello world". |
 | **CartPole** | `cargo run --release --example cartpole` | Balancing via the built-in actor-critic, with built-in physics — no Python. |
+| **CartPole (Gymnasium)** | `cargo run --release -p dcc_sph_gym_examples --example cartpole_env_runner` | The same task driven through a real Gymnasium environment. Needs Python — see below. |
+| **LunarLander** | `cargo run --release -p dcc_sph_gym_examples --example lunarlander` | A harder continuous-control task. Needs Python — see below. |
 
 ### Ported from OgmaNeoDemos
 
@@ -129,14 +131,15 @@ Sixteen demos — fifteen ported from [OgmaNeoDemos](https://github.com/jacobeve
 | **Topology Test** | `cargo run --release --example topo_test` | Whether `Encoder` preserves neighbourhood structure. (It does not — see `doc/Demos.md`.) |
 | **Stacking RL** | `cargo run --release --example stacking_rl` | Goal-conditioned RL: build the configuration you are shown. Compares two ways of delivering the goal. |
 | **Stacking Prog** | `cargo run --release --example stacking_prog` | A goal distilled into a top-layer CSDR and replayed as a "program" — the demo `step_with_goal` exists for. |
+| **Noise Robustness** | `cargo run --release --example noise_robustness` | How much input corruption a learned representation survives. Shared with `dcc-sparsey` and `dcc-htm`, so the three can be compared. |
 
 Each takes `--steps`, `--seed`, `--every` and `--quiet`; `--seed` fully determines a run. The RL demos measure themselves against a random-action baseline on the same world and seed, so the numbers mean something.
 
-A windowed viewer lives in the separate `examples-viz` crate — `cargo run --release -p dcc_sph_viz_examples --example viewer` — for the demos where motion is the point. It is a way to eyeball a demo, not instrumentation, and it changes nothing about the simulation or the reported numbers. It is a separate crate so that no graphics dependency appears in the library's manifest; see [`doc/Conformance.md`](doc/Conformance.md).
+Two companion crates hold the demos that need something the library will not carry: `examples-viz` has the windowed viewer (`cargo run --release -p dcc_sph_viz_examples --example viewer`), and `examples-gym` has the Gymnasium runners. Neither is a dependency of the library, so neither reaches a consumer — see [`doc/Conformance.md`](doc/Conformance.md). The viewer is a way to eyeball a demo, not instrumentation, and changes nothing about the simulation or the reported numbers.
 
 ### Running the Gymnasium demos
 
-These drive [Gymnasium](https://gymnasium.farama.org/) environments via PyO3, so they need a Python environment as well as the crate feature. On Apple Silicon, use the Homebrew Python explicitly so the interpreter architecture matches the Rust binary:
+These live in the separate [`examples-gym/`](examples-gym/) crate and drive [Gymnasium](https://gymnasium.farama.org/) environments via PyO3, so they need a Python environment. On Apple Silicon, use the Homebrew Python explicitly so the interpreter architecture matches the Rust binary:
 
 ```bash
 /opt/homebrew/bin/python3 -m venv .venv
@@ -144,7 +147,7 @@ source .venv/bin/activate
 pip install maturin 'gymnasium[box2d]'
 deactivate
 
-PYO3_PYTHON=`pwd`/.venv/bin/python3 cargo build --release --features gymnasium-examples
+PYO3_PYTHON=`pwd`/.venv/bin/python3 cargo build --release -p dcc_sph_gym_examples
 ```
 
 The runners detect the `.venv` directory themselves, so no activation is needed to run them.
@@ -220,7 +223,11 @@ CI pins `RAYON_NUM_THREADS=1`. That is not tidiness: the parallel paths use dete
 
 ## Optional features
 
-- `gymnasium-examples` — builds the two PyO3-backed example runners. Off by default, and deliberately not part of `--all-features` in CI, because it pulls `pyo3` with `auto-initialize` and needs Python development headers. With it off, no consumer of this crate pulls any Python.
+**None.** The library has no optional features and, deliberately, no `pyo3`.
+
+There was a `gymnasium-examples` feature until 2026-08-12, gating an optional `pyo3` for the two Gymnasium runners. `pyo3-ffi` sets `links = "python"` and cargo permits exactly one such package per dependency graph, so an optional dependency was not enough: the constraint binds the moment any consumer enables the feature, and dcc-core's Python binding builds with every port on.
+
+The runners now live in [`examples-gym/`](examples-gym/), a workspace member that nothing depends on, so `pyo3` never enters a consumer's graph at all. See [`doc/Conformance.md`](doc/Conformance.md) (R11, R16).
 
 ---
 

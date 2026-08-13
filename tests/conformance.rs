@@ -140,53 +140,34 @@ fn r3_standalone_workspace_root_with_spdx_license() {
 /// merely duplicated. dcc-core's Python binding links the whole engine graph including
 /// this crate.
 ///
-/// This crate keeps `pyo3` optional and off by default for the two Gymnasium example
-/// runners, which is survivable only because the version happens to match dcc-core's.
-/// Under R16 those examples belong in a separate crate; until then this test holds the
-/// two properties that keep it harmless: optional, and not reachable from `default`.
+/// This is now an assertion of **absence**, which is the strong form. Until 2026-08-12
+/// `pyo3` was an optional dependency here for the two Gymnasium runners, and the test
+/// could only check that it stayed optional and off by default — a weaker property,
+/// because optionality does not help if any consumer enables the feature, and dcc-core's
+/// Python binding builds with every port on.
 ///
-/// Note that cargo already rejects one half of this itself — dropping `optional = true`
-/// while `gymnasium-examples` says `dep:pyo3` is a manifest parse error. The assertion
-/// is kept anyway, because it also covers adding `pyo3` as a plain dependency with no
-/// feature at all, which cargo accepts happily.
+/// The runners moved to `examples-gym/`, a workspace member that nothing depends on. A
+/// sibling member never enters a consumer's graph, so the constraint is gone rather than
+/// merely dormant, and this test can demand that `pyo3` not appear at all.
 ///
-/// The `default` half is the one cargo will not catch, and it is checked against the
-/// FEATURE NAMES that reach `pyo3` rather than against the string "pyo3" — a default
-/// list would say `gymnasium-examples`, never `pyo3`, so matching on the crate name
-/// would silently pass. (It did, in the first draft of this test.)
+/// Do not "restore" it as an optional dependency to make something build. Anything
+/// needing Python belongs in `examples-gym/` or another member crate.
 #[test]
-fn r11_pyo3_stays_optional_and_off_by_default() {
-    let deps = dependencies_section();
-    if let Some(line) = deps.lines().find(|l| l.trim_start().starts_with("pyo3")) {
-        assert!(
-            line.contains("optional = true"),
-            "R11: `pyo3` must stay optional — it sets links = \"python\", which permits \
-             exactly one per dependency graph. Found: {line}"
-        );
-    }
-
-    // Every feature whose expansion mentions pyo3, by name.
-    let pyo3_features: Vec<&str> = CARGO_TOML
+fn r11_pyo3_is_absent_from_the_library() {
+    let offending: Vec<&str> = dependencies_section()
         .lines()
-        .filter(|l| l.contains("pyo3") && l.contains('='))
-        .filter_map(|l| l.split('=').next())
-        .map(str::trim)
-        .filter(|n| *n != "pyo3")
+        .filter(|l| l.trim_start().starts_with("pyo3"))
+        .map(|l| Box::leak(l.to_string().into_boxed_str()) as &str)
         .collect();
 
-    if let Some(default_line) = CARGO_TOML
-        .lines()
-        .find(|l| l.trim_start().starts_with("default"))
-    {
-        for feature in &pyo3_features {
-            assert!(
-                !default_line.contains(feature),
-                "R11: the `default` feature must not reach `pyo3` (via `{feature}`), or \
-                 every consumer inherits a Python toolchain requirement and a links \
-                 conflict. Found: {default_line}"
-            );
-        }
-    }
+    assert!(
+        offending.is_empty(),
+        "R11: `pyo3` must not be a dependency of the library, optional or otherwise. \
+         `pyo3-ffi` sets links = \"python\" and cargo permits exactly one such package \
+         per dependency graph, so two majors are UNRESOLVABLE — and dcc-core's Python \
+         binding links this crate. Put anything needing Python in `examples-gym/` (a \
+         workspace member nothing depends on) instead. Found: {offending:?}"
+    );
 }
 
 /// R10 / R16 — the runtime dependency surface stays as small as `doc/Conformance.md`

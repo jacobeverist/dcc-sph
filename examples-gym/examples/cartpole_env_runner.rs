@@ -6,12 +6,12 @@
 // library via PyO3.  Requires Python with `pip install gymnasium` installed.
 //
 // Run with:
-//   cargo run --release --example cartpole_env_runner --features gymnasium-examples
+//   cargo run --release -p dcc_sph_gym_examples --example cartpole_env_runner
 
 use dcc_sph::helpers::Int3;
 use dcc_sph::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyNone};
+use pyo3::types::PyDict;
 
 /// Add the venv's site-packages to sys.path so gymnasium is importable when
 /// running via `cargo run` without manually activating the venv first.

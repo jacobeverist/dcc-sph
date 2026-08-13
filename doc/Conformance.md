@@ -6,7 +6,7 @@ dcc-core imports this crate as a rev-pinned git dependency and wraps it as a `No
 
 **What is mechanically checked lives in [`../tests/conformance.rs`](../tests/conformance.rs)** and runs on every `cargo test`. The rest is recorded here with rationale.
 
-**This crate is the one that fails a requirement.** R9 is not satisfied and cannot be satisfied without restructuring; what follows is an honest account rather than a clean bill.
+**This crate still fails R9.** That is the one genuine outstanding failure; what follows is an honest account rather than a clean bill.
 
 ## Status
 
@@ -19,15 +19,15 @@ dcc-core imports this crate as a rev-pinned git dependency and wraps it as a `No
 | R5 | State expressible as grouped CSDR or sparse index list | ✅ | CSDRs; plus one documented exception, see note |
 | R6 | Config types are serde `Serialize + Deserialize + Clone` | n/a | configs are engine-owned; see note |
 | R7 | Learned state serializes to bytes | ✅ | `VecWriter` / `SliceReader` |
-| R8 | Forward pass separable from update | ⚠️ | mixed; see note |
+| R8 | Forward/update separation declared | ✅ | mixed, per type; see note |
 | R9 | RNG per-object and seed-parameterised, no globals | ❌ | **fails**; mitigation pinned by `r9_global_rng_mitigation_api_is_intact` |
 | R10 | Behavior-critical majors match dcc-core | ✅ | `r10_runtime_dependencies_stay_minimal`; see note |
-| R11 | No `pyo3` | ⚠️ | `r11_pyo3_stays_optional_and_off_by_default` |
+| R11 | No `pyo3` | ✅ | `r11_pyo3_is_absent_from_the_library` |
 | R12 | `getrandom` absent; wasm32 clean | ✅ | `r12_getrandom_is_absent_from_the_graph`, plus a CI wasm32 build |
 | R13 | `json-schema` feature for owned config types | n/a | no owned config types |
 | R14 | Builds in isolation under a single feature | ✅ | dcc-core's CI |
 | R15 | Node type tag is prefix-identifiable | ✅ | `SPH*`, wrapper-side |
-| R16 | Local apps kept out of a consumer's graph | ⚠️ | `r10_runtime_dependencies_stay_minimal`; partly resolved, see note |
+| R16 | Local apps kept out of a consumer's graph | ✅ | `examples-viz/` and `examples-gym/`; see note |
 
 ## R9 — the failure
 
@@ -54,20 +54,32 @@ It is also why dcc-core declares this crate in `[workspace.dependencies]` rather
 
 **R6 / R13 — configs are engine-owned.** Unlike the sibling ports, this crate's parameter types are not embedded in dcc-core's adapter configs; dcc-core defines its own config structs and converts at the boundary. So nothing here needs serde derives for config purposes, and there is no `json-schema` feature to expose. Both routes are sanctioned; this is the deliberate one.
 
-**R8 — forward/update separation: mixed, and this crate has both cases.** `Encoder` and `Decoder` separate a re-runnable deterministic forward pass from the update, so their wrappers use the ordinary `compute()`/`learn()` split — at the cost of a second forward pass per learning tick. `Hierarchy` and `Actor` do forward+learn+tick in one `step` call, so theirs must use the monolithic-step recipe: no-op `compute()`, and override **both** `execute` and `execute_in_thread`. `Decoder` is the awkward one: its `learn()` has to re-activate on the *previous* step's features to restore the dendrite activations the weight update needs, so the wrapper caches the prediction explicitly.
+**R8 — mixed, and this crate has both cases.** R8 asks a crate to *declare* which of two shapes it has, not to have a particular one: "either a re-runnable deterministic forward pass, or accept the monolithic-step recipe." Both are compliant; the answer is what tells a wrapper author which recipe to use.
+
+`Encoder` and `Decoder` separate a re-runnable deterministic forward pass from the update, so their wrappers use the ordinary `compute()`/`learn()` split — at the cost of a second forward pass per learning tick. `Hierarchy` and `Actor` do forward+learn+tick in one `step` call, so theirs must use the monolithic-step recipe: no-op `compute()`, and override **both** `execute` and `execute_in_thread`. `Decoder` is the awkward one: its `learn()` has to re-activate on the *previous* step's features to restore the dendrite activations the weight update needs, so the wrapper caches the prediction explicitly.
+
+*(This row read ⚠️ until 2026-08-12. That was a mis-marking, not a finding: it recorded a property as a partial failure. Nothing in this crate changed.)*
 
 **R10 — no shared runtime dependencies to skew.** This crate's only runtime dependency is `rayon`. It has no `rand`, `serde`, `schemars` or `thiserror` in `[dependencies]` — serde is dev-only, for the fidelity fixtures — so there is nothing to keep in step with dcc-core's majors.
 
 That was prose until the demo suite landed, and prose is not a guard: adding a demo is exactly the kind of change that quietly adds a dependency here. `r10_runtime_dependencies_stay_minimal` now allowlists `[dependencies]` to `rayon` and `pyo3`, so the claim above fails the build rather than the documentation when it stops being true. It is a different shape from the siblings' `r10_*` version tests, because the property being defended is different — they keep majors in step, this keeps the list empty.
 
-**R11 — `pyo3`, off by default.** The two Gymnasium example runners need it, behind the `gymnasium-examples` feature. `pyo3-ffi` sets `links = "python"` and cargo permits exactly one such package per graph, so two majors are *unresolvable*, not merely duplicated — and dcc-core's Python binding links this crate. It is survivable only because the version happens to match, which is luck rather than design. Under R16 these examples belong in a separate crate; that move has not been made.
+**R11 — `pyo3` is gone from the library, as of 2026-08-12.** It was an optional dependency here for the two Gymnasium runners. `pyo3-ffi` sets `links = "python"` and cargo permits exactly one such package per dependency graph, so two majors are *unresolvable*, not merely duplicated — and dcc-core's Python binding links this crate. Optionality did not really help: it only takes one consumer enabling the feature, and dcc-core builds with every port on. It worked because the versions happened to match, which is luck rather than design.
+
+The runners now live in `examples-gym/` (see R16), so `pyo3` is absent from the library entirely and `r11_pyo3_is_absent_from_the_library` asserts that. **This removed the last cross-repo version constraint in the whole import**: nothing now forces this repository and dcc-core to move pyo3 majors together.
 
 **R12 — satisfied, and not by accident.** This crate has no `rand` dependency: its randomness is a PCG32 in `helpers`, which is precisely what makes bit-exact integer parity with the AOgmaNeo C++ achievable. So `getrandom` never enters the graph and `cargo check --target wasm32-unknown-unknown` passes standalone. Note `rayon` compiles for wasm32 but has no threads there, degrading to serial — fine for correctness, and CI pins `RAYON_NUM_THREADS=1` anyway so a fidelity failure means "the algorithm changed" rather than "the scheduler differed".
 
-**R16 — half resolved, and the remaining half is `pyo3`.** `examples/` now holds fifteen headless demo runners plus the two Gymnasium ones. Examples themselves are free — a consumer never resolves an external package's dev-dependencies — so `png` and `rapier2d`, which several demos need, are ordinary dev-dependencies and cost nothing. `getrandom` stays out of the lockfile with them present, so R12 is unaffected.
+**R16 — fully resolved, in two crates for two reasons.**
 
-The windowed demo viewer was the case that had to be decided rather than inherited. It needs `macroquad`, a windowing and GL stack, and the obvious route was an optional dependency behind a feature — exactly the shape `pyo3` has. That is what R16 forbids, and the reasoning does not depend on `links`: an optional dependency is still a real `[dependencies]` entry, it lands in the lockfile, it constrains resolution for every consumer, and it is one `default = [...]` edit away from being unavoidable. `macroquad` is milder than `pyo3` only in that two majors would duplicate rather than fail to resolve.
+`examples-gym/` is a workspace member holding `cartpole_env_runner` and `lunarlander`, with `pyo3` as *its* dependency. `examples-viz/` is a second member holding the windowed demo viewer, with `macroquad` as *its* dependency. Both are `publish = false` and nothing depends on either, so neither enters a consumer's graph — dcc-core depends on the `dcc_sph` package by name, and sibling members are not part of that resolution.
 
-So the viewer lives in **`examples-viz/`**, a workspace member with its own manifest, and `macroquad` appears nowhere in this package. `[workspace] default-members = ["."]` keeps plain `cargo build` and `cargo test` from building it anyway — without that line, listing a member would hand every developer a GL stack on the default path, which is most of what the requirement is trying to prevent.
+Both are R16's middle tier, chosen over the third (an optional feature) exactly as the requirement directs. For `pyo3` the reason is `links`: anything with a `links` crate, a C/FFI binding or a foreign toolchain must be a separate crate, because an optional feature's constraints bind the moment any consumer enables it. For `macroquad` the reasoning does not depend on `links` at all — an optional dependency is still a real `[dependencies]` entry, it lands in the lockfile, it constrains resolution for every consumer, and it is one `default = [...]` edit away from being unavoidable. `macroquad` is milder than `pyo3` only in that two majors would duplicate rather than fail to resolve.
 
-`pyo3` remains. Moving `cartpole_env_runner` and `lunarlander` into an `examples-gym` crate the same way would remove the last cross-repo version constraint in the whole import; `examples-viz` is a worked example of the move.
+`[workspace] default-members = ["."]` is what keeps plain `cargo build` and `cargo test` from building either one anyway. Without that line, listing the members would hand every developer a GL stack and a Python toolchain on the default path, which is most of what the requirement is trying to prevent.
+
+The sixteen headless demos stay in `examples/` — R16's first tier, which is free: a consumer never resolves an external package's dev-dependencies. So `png` and `rapier2d`, which several demos need, are ordinary dev-dependencies and cost nothing, and `getrandom` stays out of the lockfile with them present, leaving R12 unaffected.
+
+**This is now measured rather than argued.** Repointing dcc-core at this commit and diffing its `Cargo.lock` changed exactly one line — the `rev` string. `cargo tree -p dcc_sph` in that workspace prints `rayon` and nothing else, with no `png`, no `rapier2d`, no `serde`, no `criterion`, no `macroquad` and no `pyo3`; `--edges dev` prints nothing at all. dcc-core's full suite (115 binaries, 1643 tests) passes against it.
+
+Note the whole repository tree is still *fetched* by a git dependency — cargo ignores `include`/`exclude` there — so `examples-gym/`, `examples-viz/` and `examples/` are all downloaded on a cold cache even though none is built. That is a download cost, not a build or licensing one.
