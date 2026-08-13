@@ -405,6 +405,26 @@ At half the columns corrupted the hierarchy still classifies at four times chanc
 
 The spread widens with noise — ± 0.033 at 0.0 against ± 0.147 at 0.5 — so single-seed comparisons at the high end of this curve are not comparisons. Use `--repeat`.
 
+#### The three-way comparison
+
+All three ports now implement this task, and they produce three genuinely different shapes. The numbers below are each port's own measurement on its own version of the task, so they are **not** a benchmark — the architectures, the encodings and the tasks' details all differ, and whichever number is highest at a given row means very little. What is comparable is the *shape*, and the shapes differ in ways that say something real about the architectures.
+
+| corruption | `dcc-sph` | `dcc-htm` | `dcc-sparsey` |
+|---|---|---|---|
+| 0.0 | 0.979 | 1.000 | 1.000 |
+| 0.2 | 0.814 | 1.000 | 1.000 |
+| 0.4 | 0.618 | 1.000 | 1.000 |
+| 0.45 | — | 0.906 | — |
+| 0.5 | 0.497 | 0.226 | 1.000 |
+| 0.6 | — | 0.125 | 1.000 |
+| 0.8 | — | — | 0.728 |
+
+- **`dcc-sph` degrades smoothly.** A slope from 0.98 to 0.50, losing a little accuracy for every increment of corruption. Nothing survives intact and nothing collapses.
+- **`dcc-htm` is a cliff.** Perfect through 40% corruption and at chance by 50%, with the whole transition inside a 0.05 window. Its `column_overlap` metric shows the mechanism: the SpatialPooler's inhibition absorbs corruption almost completely — classification is still perfect when only 49% of columns survive, and 90% correct at 13% — and past that there is nothing left to absorb it.
+- **`dcc-sparsey` is flat, and it is the only one that tells you.** Recall holds at 1.000 to 60% corruption with the stored code coming back all but exactly, then falls. Meanwhile its familiarity scalar `G` declines almost linearly the whole way — 1.000, 0.802, 0.604, 0.446, 0.270 — so the network reports how corrupted the input was *while still answering correctly*. Neither sibling has any such signal: both are equally confident when right and when wrong.
+
+That last point is the one worth taking away. Accuracy alone would rank these three and tell you almost nothing; the interesting differences are in what fails first, how abruptly, and whether the system knows.
+
 ## Not ported
 
 | Upstream | Why |
