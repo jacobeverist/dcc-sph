@@ -78,7 +78,7 @@ examples/
   wavy_line.rs, wavy_classify.rs, ball_physics.rs, video_prediction.rs,
   vsa_char.rs, pusher.rs, cat_mouse.rs, cat_mouse_pos.rs, explore.rs,
   car_racing.rs, runner.rs, enc_vis.rs, topo_test.rs,
-  stacking_rl.rs, stacking_prog.rs
+  stacking_rl.rs, stacking_prog.rs, noise_robustness.rs
                           — ported from OgmaNeoDemos; see doc/Demos.md
 examples-viz/             — SEPARATE CRATE; macroquad lives here, not in the library
   examples/
@@ -88,7 +88,9 @@ assets/                   — the two track bitmaps car_racing needs
 
 ### Demos
 
-Fifteen demos ported from [OgmaNeoDemos](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo) (Ogma's own, same CC BY-NC-SA 4.0 licence — attribution is in `PROVENANCE.md`). **[`doc/Demos.md`](doc/Demos.md) is the reference**: it records each demo's upstream source and every deviation from it, and several of those deviations are load-bearing rather than cosmetic.
+Sixteen demos: fifteen ported from [OgmaNeoDemos](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo) (Ogma's own, same CC BY-NC-SA 4.0 licence — attribution is in `PROVENANCE.md`), plus `noise_robustness`, which is RUST-ONLY. **[`doc/Demos.md`](doc/Demos.md) is the reference**: it records each demo's upstream source and every deviation from it, and several of those deviations are load-bearing rather than cosmetic.
+
+`doc/Demos.md` also states the **cross-repo demo contract** — the flags, record schema, baseline rule and verdict wording shared with `dcc-sparsey` and `dcc-htm`. The three repositories share no code and cannot (CC BY-NC-SA and AGPL do not mix), so the contract is prose that each repository answers separately, exactly as each answers R1–R16 in its own `doc/Conformance.md`. `noise_robustness` is the one demo all three implement.
 
 They **run headless and text-only with no features enabled**, which is the default path and the one CI runs. Keep it that way — the windowed viewer exists so a demo can be eyeballed, not as instrumentation. Real visualisation is dcc-dashboard's job, and `examples/support/viz.rs` should stay at five functions.
 

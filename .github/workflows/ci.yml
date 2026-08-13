@@ -112,6 +112,12 @@ jobs:
           cargo run --release --example stacking_rl   -- --steps 2000 --baseline-steps 500 --goal-mode top --quiet
           cargo run --release --example stacking_prog -- --steps 3000 --trials 10 --quiet
           cargo run --release --example stacking_prog -- --steps 3000 --trials 10 --train-policy scripted --quiet
+          cargo run --release --example noise_robustness -- --train-steps 3000 --test-steps 1000 --quiet
+          # Once through the sweep driver, so --repeat/--sweep are covered by CI at
+          # all. Every other line here runs a demo exactly once, which leaves the
+          # run-matrix code path — the thing every offline experiment goes through —
+          # built but never executed.
+          cargo run --release --example noise_robustness -- --train-steps 2000 --test-steps 500 --sweep noise=0,0.5 --repeat 2 --quiet
 
       # Checks the metrics FORMAT, not the metrics. Two properties everything else
       # rests on: the records parse and carry their identifying keys, and the same

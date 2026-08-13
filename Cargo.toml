@@ -156,6 +156,11 @@ name = "stacking_rl"
 [[example]]
 name = "stacking_prog"
 
+# RUST-ONLY — no OgmaNeoDemos counterpart. This is the shared demo the three ports
+# (dcc-sph, dcc-sparsey, dcc-htm) all implement; see doc/Demos.md.
+[[example]]
+name = "noise_robustness"
+
 [[example]]
 name = "cartpole_env_runner"
 required-features = ["gymnasium-examples"]

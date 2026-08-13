@@ -110,7 +110,7 @@ Start here:
 
 ### Ported from OgmaNeoDemos
 
-Fifteen demos ported from [OgmaNeoDemos](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo), Ogma's own demo repository. Each doubles as an end-to-end check that a feature of the library works on a real problem. [`doc/Demos.md`](doc/Demos.md) records what each one does and where it departs from its source.
+Sixteen demos — fifteen ported from [OgmaNeoDemos](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo), Ogma's own demo repository, plus `noise_robustness`, which is shared with the sibling ports `dcc-sparsey` and `dcc-htm`. Each doubles as an end-to-end check that a feature of the library works on a real problem. [`doc/Demos.md`](doc/Demos.md) records what each one does, where it departs from its source, and the cross-repo demo contract the three ports share.
 
 | Demo | Command | Shows |
 | --- | --- | --- |

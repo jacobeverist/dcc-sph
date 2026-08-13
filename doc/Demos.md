@@ -1,6 +1,6 @@
 # Demos
 
-Fifteen demos ported from [`jacobeverist/OgmaNeoDemos`](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo) (branch `aogmaneo`), Ogma Intelligent Systems Corp, CC BY-NC-SA 4.0 — the same licence as this crate. The attribution required by §3(a) is in [`PROVENANCE.md`](../PROVENANCE.md); this file is the engineering half, recording what each demo does and where it departs from its source.
+Sixteen demos. Fifteen are ported from [`jacobeverist/OgmaNeoDemos`](https://github.com/jacobeverist/OgmaNeoDemos/tree/aogmaneo) (branch `aogmaneo`), Ogma Intelligent Systems Corp, CC BY-NC-SA 4.0 — the same licence as this crate. The attribution required by §3(a) is in [`PROVENANCE.md`](../PROVENANCE.md); this file is the engineering half, recording what each demo does and where it departs from its source. The sixteenth, `noise_robustness`, is RUST-ONLY and is described under [the cross-repo demo contract](#the-cross-repo-demo-contract) below.
 
 They all **run headless and text-only with no features enabled**. That is the default path and the one CI builds. A windowed viewer lives in the separate `examples-viz` crate for the demos where motion is the point; it exists so a demo can be eyeballed quickly, not as instrumentation — that is dcc-dashboard's job.
 
@@ -101,12 +101,31 @@ Each demo is also split into `run(args, seed, rec) -> Summary` and a `main` that
 | `topo_test` | `demos/Topo_Test_AON.cpp` | `Encoder` topology preservation |
 | `stacking_rl` | `demos/Stacking_RL.cpp` | Goal-conditioned RL; two routes for delivering the goal, compared |
 | `stacking_prog` | `demos/Stacking_Prog.cpp` | `step_with_goal`, and a goal distilled into a top-layer CSDR |
+| `noise_robustness` | RUST-ONLY | Graceful degradation of a learned representation under input corruption |
+
+## The cross-repo demo contract
+
+Three clean-room ports share this shape: `dcc-sph`, [`dcc-sparsey`](https://github.com/jacobeverist/dcc-sparsey) and [`dcc-htm`](https://github.com/jacobeverist/dcc-htm). Their architectures are too different to benchmark against one another, but an experiment run against any of them should *look* the same, so results are legible side by side.
+
+The three repositories share **no code**. They cannot: `dcc_sph` is CC BY-NC-SA 4.0 (NonCommercial) while the other two are AGPL-3.0, and those licences are mutually incompatible, so no crate may ever link more than one of them. What they share is this contract — the same arrangement the dcc-core import contract already uses, where the rules are common and each repository answers them in its own [`Conformance.md`](Conformance.md).
+
+**Flags.** Every demo accepts `--seed` (default 12345), `--steps` or `--episodes`, `--every`, `--quiet`, `--silent`, `--metrics` and `--metrics-format`, `--repeat` and `--sweep`, `--save` and `--load`. A demo that reads external data takes `--data <path>` and **must run procedurally without it**, so no repository commits third-party assets and CI needs no network.
+
+**Records.** Four kinds — `run`, `sample`, `summary`, `verdict` — in that order, one JSON object per line, each carrying `demo`, `seed` and `run`, as in the example above.
+
+**Baselines.** Every headline metric ships with a `baseline_*` twin and a `*_vs_*` ratio. A bare number cannot distinguish learning from noise; several real bugs in this suite were found exactly this way, and the `wavy_classify` and `explore` sections below record two of them.
+
+**Verdicts.** Wording is `"Learned: …"` or `"Not converged: …"`. A **correct negative result is `learned: true`** with a note explaining why more training cannot change it — `topo_test` is the precedent, and it matters because a demo that reports an honest negative is working, not failing.
+
+**Shape.** `fn run(args: &Args, seed: u64, rec: &mut Recorder) -> Summary`, with `main` doing nothing but parse, build a `Recorder` and call `sweep::drive`.
+
+**The common demo.** `noise_robustness` is implemented in all three repositories, because a shared task anchors the contract in something executable rather than only in prose. It is the one place where the three can be put beside each other honestly: not *which scores higher*, but *what shape each one's degradation curve has*.
 
 ## Layout
 
 `examples/support/` holds everything shared: argument parsing, CSDR encoding, text reporting, the RNG wrapper, the encoder probe, and one module per environment. Cargo examples cannot depend on each other, so each demo pulls it in with `#[path = "support/mod.rs"] mod support;` — the idiom `examples/fidelity_dump.rs` already uses for `tests/support/`. A directory under `examples/` with no `main.rs` is not auto-discovered, so `support/` is not itself a target.
 
-Example targets default to `test = false`, so `#[cfg(test)]` code inside them never runs. `tests/demos_support.rs` includes the same tree, which compiles it in test configuration and runs its unit tests as part of `cargo test` — 126 of them, covering the encoding helpers, the reporting primitives, the hypervector algebra, every environment's physics and the encoder probe.
+Example targets default to `test = false`, so `#[cfg(test)]` code inside them never runs. `tests/demos_support.rs` includes the same tree, which compiles it in test configuration and runs its unit tests as part of `cargo test` — 130 of them, covering the encoding helpers, the reporting primitives, the hypervector algebra, every environment's physics and the encoder probe.
 
 ## Cross-cutting decisions
 
@@ -352,6 +371,39 @@ Two things about it matter:
 More training cannot change this. `Encoder` has **no topology-forming mechanism**: its only neighbourhood parameter, `Params::l_radius`, drives lateral inhibition — it decides whether a column may learn by counting how many neighbours scored higher — and never updates a neighbour's weights. Learning touches the winning cell and nothing else, so a cell's index within a column carries no spatial meaning. `ImageEncoder` is the SOM here: it carries `Params::falloff` and `Params::n_radius`, and updates cells at distance `d` from the winner at `rate * falloff^d`. That is worth knowing before reaching for `Encoder` expecting a map. The upstream demos probe an AOgmaNeo revision whose encoder stored `vl.means`, a different formulation; the difference is algorithmic, not a port defect.
 
 `enc_vis` prints the raw weight profiles alongside its summary so the claim can be checked rather than taken on trust.
+
+### `noise_robustness`
+
+**RUST-ONLY — there is no upstream counterpart.** This is the shared demo of the cross-repo contract above, so its deviations are design decisions rather than departures from a source.
+
+A book of random patterns is memorised, one per class, each held for `--hold` steps while both the pattern and its label are observed. At test time the label is withheld — the label port is fed the hierarchy's own previous prediction — and exactly `--noise × 16` observation columns are corrupted. The question is not whether the model classifies but how accuracy *decays*.
+
+**The control is exact-match lookup, and it is not there to be beaten.** It is perfect at zero noise and blind one column off it, so its curve is the shape that pure memorisation produces. A system that generalises produces a different shape; that difference is the entire measurement. Nearest-neighbour would have been the stronger control and was rejected for exactly that reason — it is near-optimal on this task, so it would have measured how good a classical method is rather than what the representation does.
+
+**Corruption replaces a fixed count of columns, not a per-column coin flip.** Every test step at a given `--noise` is corrupted by exactly the same amount, so a sweep measures the corruption level rather than the variance around it.
+
+**Replacement values are drawn from the values a column does not hold.** A uniform redraw would silently pick the original value about one time in `COLUMN_SIZE`, making the effective corruption `fraction × (1 − 1/16)`. `corruption_changes_exactly_the_requested_column_count` in `env/noise.rs` is the guard, and it asserts the *actual* changed-column count, not the requested one — the version that only checked the requested count passed against the bug.
+
+**Every run evaluates twice, clean and corrupted.** Without the clean pass there is no way to separate "corruption hurt" from "it never learned", which is precisely the ambiguity a sweep produces at its high end.
+
+**The verdict keys on the clean pass.** Failing to classify at heavy corruption is the correct answer, not a failed run. A verdict keyed on the noisy pass would report "not converged" for most rows of the sweep the demo exists to produce.
+
+**There is no `accuracy_vs_lookup` ratio**, though the contract asks every headline metric for one. Exact match is zero at every noise level above zero *by construction*, so the ratio is either 0/0 or x/0 and carries nothing the two raw numbers do not. `accuracy_vs_chance` is the ratio that means something here.
+
+Typical result — 8 patterns, 2 layers, 60k training steps, 3 seeds per point:
+
+| `--noise` | accuracy | retention | exact match | chance |
+|---|---|---|---|---|
+| 0.0 | 0.979 ± 0.033 | 0.996 | 1.000 | 0.125 |
+| 0.1 | 0.881 ± 0.062 | 0.897 | 0.000 | 0.125 |
+| 0.2 | 0.814 ± 0.091 | 0.828 | 0.000 | 0.125 |
+| 0.3 | 0.684 ± 0.129 | 0.697 | 0.000 | 0.125 |
+| 0.4 | 0.618 ± 0.136 | 0.630 | 0.000 | 0.125 |
+| 0.5 | 0.497 ± 0.147 | 0.507 | 0.000 | 0.125 |
+
+At half the columns corrupted the hierarchy still classifies at four times chance, while the memorising control has been at zero since the first corrupted column. Note that `clean_accuracy`, `min_separation` and `online_train_accuracy` are identical across every sweep point: the seeds, the pattern book and the training are the same, and only test-time corruption varies. That is a useful check that the sweep is varying what it claims to.
+
+The spread widens with noise — ± 0.033 at 0.0 against ± 0.147 at 0.5 — so single-seed comparisons at the high end of this curve are not comparisons. Use `--repeat`.
 
 ## Not ported
 
